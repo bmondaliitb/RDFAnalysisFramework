@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def delta_phi(phi1, phi2):
     """Return phi1 - phi2 folded into [-pi, pi)."""
     dphi = phi1 - phi2
@@ -39,7 +40,6 @@ def _sum_clusters(
     py_sum = 0.0
     pz_sum = 0.0
     e_sum = 0.0
-    pt_list = []
 
     for e, eta, phi in zip(cl_e, cl_eta, cl_phi):
         if e < 0:
@@ -50,7 +50,6 @@ def _sum_clusters(
             continue
 
         pt = cluster_pt_from_e_eta(e, eta)
-        pt_list.append(pt)
         test_val = pt if threshold_on_pt else e
         if test_val < threshold:
             continue
@@ -171,7 +170,7 @@ def _get_random_cone_phis(hr_eta, hr_phi, lep_pt, lep_eta, lep_phi, min_dist_con
     rng = np.random.default_rng(seed)
 
     rnd_phis = []
-    for l_eta, l_phi in zip(lep_eta, lep_phi):
+    for l_eta, _ in zip(lep_eta, lep_phi):
         while True:
             rnd_phi = rng.uniform(-np.pi, np.pi)
 
@@ -207,30 +206,6 @@ def hadronic_recoil_from_clusters_python(
 ):
     """
     Python implementation of the C++ hadrecoilCorr_PFO-like logic for clusters.
-
-    Inputs
-    ------
-    lep_pt, lep_eta, lep_phi : array-like
-        Lepton kinematics for the event.
-    cl_e, cl_eta, cl_phi : array-like
-        Cluster kinematics for the event. cl_e should be in GeV.
-    threshold : float
-        Cluster threshold value.
-    threshold_on_pt : bool
-        If True threshold on cluster pT (= E/cosh(eta)), else on E.
-    abs_eta_min, abs_eta_max : float
-        Acceptance on |eta|.
-    dr_cone : float
-        Lepton-cone radius used for removal and random-cone collection.
-    min_dist_cone : float
-        Minimum distance of random cone from leptons and recoil direction.
-    return_components : bool
-        If True return full dict; else return only (u_x, u_y).
-
-    Returns
-    -------
-    dict or tuple
-        Corrected recoil vector and bookkeeping.
     """
     lep_pt = np.asarray(lep_pt, dtype=float)
     lep_eta = np.asarray(lep_eta, dtype=float)
@@ -240,7 +215,6 @@ def hadronic_recoil_from_clusters_python(
     cl_eta = np.asarray(cl_eta, dtype=float)
     cl_phi = np.asarray(cl_phi, dtype=float)
 
-    # Step 1: uncorrected hadronic sum after lepton-cone removal
     hr = _hadrecoil_uncorrected(
         lep_eta=lep_eta,
         lep_phi=lep_phi,
@@ -254,7 +228,6 @@ def hadronic_recoil_from_clusters_python(
         dr_cone=dr_cone,
     )
 
-    # Step 2: random cone positions
     rnd_phis = _get_random_cone_phis(
         hr_eta=hr["eta"],
         hr_phi=hr["phi"],
@@ -264,7 +237,6 @@ def hadronic_recoil_from_clusters_python(
         min_dist_cone=min_dist_cone,
     )
 
-    # Step 3: UE correction by rotating random-cone content onto lepton phi
     ue_corr_per_lepton = []
     px = hr["px"]
     py = hr["py"]
@@ -327,14 +299,10 @@ def hadronic_recoil_from_clusters_python(
             }
         )
 
-    # Final corrected hadronic vector sum
     hr_pt = np.hypot(px, py)
     hr_phi = np.arctan2(py, px) if hr_pt > 0 else 0.0
     hr_eta = np.arcsinh(pz / hr_pt) if hr_pt > 0 else 0.0
 
-    # Recoil convention:
-    # C++ hadrecoilCorr_PFO returns the hadronic-vector sum.
-    # If you want recoil u = -sum pT, flip the sign here.
     u_x = -px
     u_y = -py
     u_pt = np.hypot(u_x, u_y)
@@ -359,15 +327,13 @@ def hadronic_recoil_from_clusters_python(
     return u_x, u_y
 
 
-def hadrecoil_from_truth_particles(
-    event_truth_pt, event_truth_eta, event_truth_phi, return_components=True
-):
+def hadrecoil_from_truth_particles(event_truth_pt, event_truth_eta, event_truth_phi, return_components=True):
     """
     Recompute truth MET components with TruthType::Int convention (weight = -1),
     and expose recoil as u = -MET.
     """
     pt = np.asarray(event_truth_pt, dtype=float)
-    eta = np.asarray(event_truth_eta, dtype=float)  # kept for interface consistency
+    eta = np.asarray(event_truth_eta, dtype=float)
     phi = np.asarray(event_truth_phi, dtype=float)
 
     if not (pt.shape == eta.shape == phi.shape):
@@ -402,27 +368,7 @@ def hadrecoil_from_truth_particles(
 
 
 def compute_sum_et_from_energy(energy, eta=None):
-    """
-    Compute sum_et from particle/cluster energy.
-    sum_et is scalar sum of particle/cluster transverse momentum.
-
-    If eta is provided:
-        et_i = E_i / cosh(eta_i)   (massless approximation)
-    If eta is not provided:
-        et_i = E_i
-
-    Parameters
-    ----------
-    energy : array-like
-        Per-particle energies.
-    eta : array-like or None
-        Per-particle pseudorapidities.
-
-    Returns
-    -------
-    float
-        Scalar sum_et.
-    """
+    """Compute scalar sum_et from particle or cluster energy."""
     energy = np.asarray(energy, dtype=float)
 
     if eta is None:
@@ -435,7 +381,7 @@ def compute_sum_et_from_energy(energy, eta=None):
 
     return float(np.sum(et))
 
+
 def compute_sum_et(pt):
     pt = np.asarray(pt, dtype=float)
     return float(np.sum(np.abs(pt)))
-

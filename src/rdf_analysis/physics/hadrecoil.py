@@ -327,10 +327,18 @@ def hadronic_recoil_from_clusters_python(
     return u_x, u_y
 
 
-def hadrecoil_from_truth_particles(event_truth_pt, event_truth_eta, event_truth_phi, return_components=True):
+def hadrecoil_from_truth_particles(
+    event_truth_pt,
+    event_truth_eta,
+    event_truth_phi,
+    threshold=None,
+    return_components=True,
+):
     """
     Recompute truth MET components with TruthType::Int convention (weight = -1),
     and expose recoil as u = -MET.
+
+    When `threshold` is set, truth particles with pT <= threshold are excluded.
     """
     pt = np.asarray(event_truth_pt, dtype=float)
     eta = np.asarray(event_truth_eta, dtype=float)
@@ -338,6 +346,12 @@ def hadrecoil_from_truth_particles(event_truth_pt, event_truth_eta, event_truth_
 
     if not (pt.shape == eta.shape == phi.shape):
         raise ValueError("event_truth_pt, event_truth_eta, event_truth_phi must match in shape")
+
+    if threshold is not None:
+        mask = pt > threshold
+        pt = pt[mask]
+        eta = eta[mask]
+        phi = phi[mask]
 
     met_px = -np.sum(pt * np.cos(phi))
     met_py = -np.sum(pt * np.sin(phi))

@@ -179,7 +179,6 @@ def _write_histograms(metrics, x_bin_edges):
 
 
 def main(args, out_file=None):
-    base_tdirectory = ROOT.gDirectory
 
     proc = NtupleProcessorRDF_jet(args.input, args.tree, args.nEvents)
     proc.build_dataframe()
@@ -192,6 +191,7 @@ def main(args, out_file=None):
     if owned_out_file:
         out_file = ROOT.TFile(args.output, "RECREATE")
 
+    base_tdirectory = ROOT.gDirectory
     metrics = _fit_response_metrics(response_data, x_bin_edges, out_file)
     base_tdirectory.cd()
     _write_histograms(metrics, x_bin_edges)

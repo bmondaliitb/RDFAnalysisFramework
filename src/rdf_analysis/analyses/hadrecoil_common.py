@@ -1,7 +1,7 @@
 import numpy as np
 
 from rdf_analysis.core import NtupleProcessorRDF
-from rdf_analysis.physics import hadronic_recoil_from_clusters_python
+from rdf_analysis.physics import hadrecoil_from_truth_particles, hadronic_recoil_from_clusters_python
 
 
 class NtupleProcessorRDF_hadrecoil(NtupleProcessorRDF):
@@ -103,7 +103,31 @@ def build_threshold_scan_observables(lep_pt, lep_eta, lep_phi, clus_e, clus_eta,
         out[thr] = {
             "u_x": hadrecoil["u_x"],
             "u_y": hadrecoil["u_y"],
-            "u_mag": hadrecoil["u_pt"],
+            "u_pt": hadrecoil["u_pt"],
+        }
+
+    return out
+
+
+def build_truth_particle_threshold_scan_observables(truth_particle_pt, truth_particle_eta, truth_particle_phi, thresholds):
+    out = {}
+
+    truth_particle_pt = np.asarray(truth_particle_pt)
+    truth_particle_eta = np.asarray(truth_particle_eta)
+    truth_particle_phi = np.asarray(truth_particle_phi)
+
+    for thr in thresholds:
+        hadrecoil = hadrecoil_from_truth_particles(
+            truth_particle_pt,
+            truth_particle_eta,
+            truth_particle_phi,
+            threshold=thr,
+        )
+
+        out[thr] = {
+            "u_x": hadrecoil["u_x"],
+            "u_y": hadrecoil["u_y"],
+            "u_pt": hadrecoil["u_pt"],
         }
 
     return out
@@ -111,4 +135,3 @@ def build_threshold_scan_observables(lep_pt, lep_eta, lep_phi, clus_e, clus_eta,
 
 def default_study2_x_bin_edges():
     return np.array([1, 5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100], dtype=np.float64)
-

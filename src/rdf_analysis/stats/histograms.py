@@ -57,10 +57,9 @@ def make_hist_from_bin_contents(hist_name, hist_title, bin_edges, bin_contents):
     for bin_idx, value in enumerate(bin_contents, start=1):
         hist.SetBinContent(bin_idx, float(value) if np.isfinite(value) else 0.0)
 
-    hist.GetXaxis().SetTitle(hist_title)
-    hist.GetYaxis().SetTitle("Events")
     return hist
 
 
 def get_bins_log(x_min, x_max, nbins):
     return np.array(np.geomspace(x_min, x_max, nbins + 1))
+

@@ -2,7 +2,34 @@ import os
 
 import numpy as np
 import ROOT
+from ..config import config_fits
 
+def calculate_mean_sigma_in_x_bins(x_variable, y_variable, x_bin_edges):
+    x = np.asarray(x_variable, dtype=np.float64)
+    y = np.asarray(y_variable, dtype=np.float64)
+
+    mask = np.isfinite(x) & np.isfinite(y)
+    x = x[mask]
+    y = y[mask]
+
+    mean_values = []
+    sigma_values = []
+
+    for i in range(len(x_bin_edges) - 1):
+        x_low = x_bin_edges[i]
+        x_high = x_bin_edges[i + 1]
+        in_bin = (x >= x_low) & (x < x_high)
+
+        if not np.any(in_bin):
+            mean_values.append(np.nan)
+            sigma_values.append(np.nan)
+            continue
+
+        y_bin = y[in_bin]
+        mean_values.append(float(np.mean(y_bin)))
+        sigma_values.append(float(np.std(y_bin)))
+
+    return np.array(mean_values), np.array(sigma_values)
 
 def calculate_gaussian_fit_params_from_arrays(x, y, x_bin_edges, out_file=None, y_name="array_obs"):
     x = np.asarray(x, dtype=np.float64)
@@ -14,6 +41,13 @@ def calculate_gaussian_fit_params_from_arrays(x, y, x_bin_edges, out_file=None, 
 
     mean_values = []
     sigma_values = []
+
+    # Load fit settings from config (values expressed in numbers of sigma)
+    fit_hist_bins = int(config_fits.get("fit_hist_bins", 100))
+    fit_hist_low_sigma = float(config_fits.get("fit_hist_low", -3))
+    fit_hist_high_sigma = float(config_fits.get("fit_hist_high", 3))
+    fit_range_low_sigma = float(config_fits.get("fit_range_low", -2))
+    fit_range_high_sigma = float(config_fits.get("fit_range_high", 1))
 
     out_dir = None
     out_dir_fs = f"outputfiles/fit_results/{y_name}"
@@ -41,25 +75,41 @@ def calculate_gaussian_fit_params_from_arrays(x, y, x_bin_edges, out_file=None, 
 
         y_mean = float(np.mean(y_bin))
         y_std = float(np.std(y_bin))
-        y_low = y_mean - 3 * y_std
-        y_high = y_mean + 3 * y_std
+
+        # Histogram range and fit range are specified in config as multiples of sigma
+        y_low = y_mean + fit_hist_low_sigma * y_std
+        y_high = y_mean + fit_hist_high_sigma * y_std
+
+        # Protect against invalid ranges (e.g. zero or NaN std)
+        if not np.isfinite(y_low) or not np.isfinite(y_high) or y_low >= y_high:
+            mean_values.append(np.nan)
+            sigma_values.append(np.nan)
+            continue
 
         hname = f"h_fit_input_{y_name}_bin{i:03d}"
         htitle = f"{y_name};{y_name};Events"
-        htmp = ROOT.TH1D(hname, htitle, 100, y_low, y_high)
+        htmp = ROOT.TH1D(hname, htitle, fit_hist_bins, y_low, y_high)
         htmp.SetDirectory(0)
         htmp.Sumw2()
 
         for val in y_bin:
             htmp.Fill(float(val))
 
-        if y_mean <= 0 or not np.isfinite(y_std):
+        if  not np.isfinite(y_std):
+            mean_values.append(np.nan)
+            sigma_values.append(np.nan)
+            continue
+
+        # Build fit function using config-provided sigma multipliers
+        fit_low = y_mean + fit_range_low_sigma * y_std
+        fit_high = y_mean + fit_range_high_sigma * y_std
+        if not np.isfinite(fit_low) or not np.isfinite(fit_high) or fit_low >= fit_high:
             mean_values.append(np.nan)
             sigma_values.append(np.nan)
             continue
 
         fit_name = f"fgaus_{y_name}_bin{i:03d}"
-        fit = ROOT.TF1(fit_name, "gaus", y_mean - 2.0 * y_std, y_mean + 1.0 * y_std)
+        fit = ROOT.TF1(fit_name, "gaus", fit_low, fit_high)
         fit.SetParameters(htmp.GetMaximum(), y_mean, y_std)
 
         fit_result = htmp.Fit(fit, "QNR")

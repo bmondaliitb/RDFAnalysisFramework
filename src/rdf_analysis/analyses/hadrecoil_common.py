@@ -132,6 +132,3 @@ def build_truth_particle_threshold_scan_observables(truth_particle_pt, truth_par
 
     return out
 
-
-def default_study2_x_bin_edges():
-    return np.array([1, 5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100], dtype=np.float64)

@@ -85,11 +85,25 @@ class NtupleProcessorRDF_hadrecoil(NtupleProcessorRDF):
 def build_threshold_scan_observables(lep_pt, lep_eta, lep_phi, clus_e, clus_eta, clus_phi, thresholds):
     out = {}
 
+    clus_e = np.asarray(clus_e)
+    clus_eta = np.asarray(clus_eta)
+    clus_phi = np.asarray(clus_phi)
+
+    # Compute absolute momentum from energy and eta: p = E / cosh(eta) * cosh(eta) = E (for massless)
+    # Actually: pT = E / cosh(eta), p = pT * cosh(eta) = E
+    # So absolute momentum equals energy for massless approximation
+    # But let's be more explicit: p = sqrt(pT^2 + pz^2) where pT = E/cosh(eta), pz = E*sinh(eta)/cosh(eta)
+    # p = E/cosh(eta) * sqrt(1 + sinh^2(eta)) = E/cosh(eta) * cosh(eta) = E
+    # So p = E for massless particles. But for clarity we compute it explicitly.
+    clus_pt = clus_e / np.cosh(clus_eta)
+    clus_p = clus_pt * np.cosh(clus_eta)  # This equals E for massless
+
     for thr in thresholds:
-        mask = np.asarray(clus_e) > thr
-        clus_e_sel = np.asarray(clus_e)[mask]
-        clus_eta_sel = np.asarray(clus_eta)[mask]
-        clus_phi_sel = np.asarray(clus_phi)[mask]
+        # Apply cut on absolute momentum
+        mask = clus_p > thr
+        clus_e_sel = clus_e[mask]
+        clus_eta_sel = clus_eta[mask]
+        clus_phi_sel = clus_phi[mask]
 
         hadrecoil = hadronic_recoil_from_clusters_python(
             np.asarray(lep_pt),
@@ -109,18 +123,20 @@ def build_threshold_scan_observables(lep_pt, lep_eta, lep_phi, clus_e, clus_eta,
     return out
 
 
-def build_truth_particle_threshold_scan_observables(truth_particle_pt, truth_particle_eta, truth_particle_phi, thresholds):
+def build_truth_particle_threshold_scan_observables(truth_particle_pt, truth_particle_eta, truth_particle_phi, truth_particle_e, thresholds):
     out = {}
 
     truth_particle_pt = np.asarray(truth_particle_pt)
     truth_particle_eta = np.asarray(truth_particle_eta)
     truth_particle_phi = np.asarray(truth_particle_phi)
+    truth_particle_e = np.asarray(truth_particle_e)
 
     for thr in thresholds:
         hadrecoil = hadrecoil_from_truth_particles(
             truth_particle_pt,
             truth_particle_eta,
             truth_particle_phi,
+            truth_particle_e,
             threshold=thr,
         )
 

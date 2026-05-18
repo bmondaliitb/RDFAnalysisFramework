@@ -28,7 +28,7 @@ def _sum_clusters(
     cl_eta,
     cl_phi,
     threshold=0.0,
-    threshold_on_pt=True,
+    threshold_on_momentum=True,
     abs_eta_min=0.0,
     abs_eta_max=10.0,
 ):
@@ -50,7 +50,12 @@ def _sum_clusters(
             continue
 
         pt = cluster_pt_from_e_eta(e, eta)
-        test_val = pt if threshold_on_pt else e
+        if threshold_on_momentum:
+            # Absolute momentum: p = pt * cosh(eta)
+            p = pt * np.cosh(eta)
+            test_val = p
+        else:
+            test_val = pt
         if test_val < threshold:
             continue
 
@@ -85,7 +90,7 @@ def _hadrecoil_uncorrected(
     cl_eta,
     cl_phi,
     threshold=0.0,
-    threshold_on_pt=True,
+    threshold_on_momentum=True,
     abs_eta_min=0.0,
     abs_eta_max=10.0,
     dr_cone=0.2,
@@ -100,7 +105,7 @@ def _hadrecoil_uncorrected(
         cl_eta=cl_eta,
         cl_phi=cl_phi,
         threshold=threshold,
-        threshold_on_pt=threshold_on_pt,
+        threshold_on_momentum=threshold_on_momentum,
         abs_eta_min=abs_eta_min,
         abs_eta_max=abs_eta_max,
     )
@@ -119,7 +124,12 @@ def _hadrecoil_uncorrected(
             continue
 
         pt = cluster_pt_from_e_eta(e, eta)
-        test_val = pt if threshold_on_pt else e
+        if threshold_on_momentum:
+            # Absolute momentum: p = pt * cosh(eta)
+            p = pt * np.cosh(eta)
+            test_val = p
+        else:
+            test_val = pt
         if test_val < threshold:
             continue
 
@@ -197,7 +207,7 @@ def hadronic_recoil_from_clusters_python(
     cl_eta,
     cl_phi,
     threshold=0.0,
-    threshold_on_pt=True,
+    threshold_on_momentum=True,
     abs_eta_min=0.0,
     abs_eta_max=10.0,
     dr_cone=0.2,
@@ -222,7 +232,7 @@ def hadronic_recoil_from_clusters_python(
         cl_eta=cl_eta,
         cl_phi=cl_phi,
         threshold=threshold,
-        threshold_on_pt=threshold_on_pt,
+        threshold_on_momentum=threshold_on_momentum,
         abs_eta_min=abs_eta_min,
         abs_eta_max=abs_eta_max,
         dr_cone=dr_cone,
@@ -258,7 +268,12 @@ def hadronic_recoil_from_clusters_python(
                 continue
 
             pt = cluster_pt_from_e_eta(e, eta)
-            test_val = pt if threshold_on_pt else e
+            if threshold_on_momentum:
+                # Absolute momentum: p = pt * cosh(eta)
+                p = pt * np.cosh(eta)
+                test_val = p
+            else:
+                test_val = pt
             if test_val < threshold:
                 continue
 
@@ -331,14 +346,21 @@ def hadrecoil_from_truth_particles(
     event_truth_pt,
     event_truth_eta,
     event_truth_phi,
+    event_truth_e=None,
     threshold=None,
+    threshold_on_energy=False,
+    threshold_on_momentum=True,
     return_components=True,
 ):
     """
     Recompute truth MET components with TruthType::Int convention (weight = -1),
     and expose recoil as u = -MET.
 
-    When `threshold` is set, truth particles with pT <= threshold are excluded.
+    When `threshold` is set:
+    - If threshold_on_momentum is True (default), truth particles with absolute momentum <= threshold are excluded.
+      Absolute momentum is computed as p = pT * cosh(eta).
+    - If threshold_on_energy is True, truth particles with energy <= threshold are excluded.
+      In this case, event_truth_e must be provided.
     """
     pt = np.asarray(event_truth_pt, dtype=float)
     eta = np.asarray(event_truth_eta, dtype=float)
@@ -348,7 +370,19 @@ def hadrecoil_from_truth_particles(
         raise ValueError("event_truth_pt, event_truth_eta, event_truth_phi must match in shape")
 
     if threshold is not None:
-        mask = pt > threshold
+        if threshold_on_momentum:
+            # Absolute momentum: p = pt * cosh(eta)
+            p = pt * np.cosh(eta)
+            mask = p > threshold
+        elif threshold_on_energy:
+            if event_truth_e is None:
+                raise ValueError("event_truth_e must be provided when threshold_on_energy is True")
+            e = np.asarray(event_truth_e, dtype=float)
+            if e.shape != pt.shape:
+                raise ValueError("event_truth_e must match shape of event_truth_pt")
+            mask = e > threshold
+        else:
+            mask = pt > threshold
         pt = pt[mask]
         eta = eta[mask]
         phi = phi[mask]

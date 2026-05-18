@@ -6,11 +6,11 @@ import sys
 
 import ROOT
 
-from rdf_analysis.stats import make_numpy_hist
-
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from rdf_analysis.stats import make_hist_from_bin_contents, make_numpy_hist
+from rdf_analysis.stats.fits import calculate_gaussian_fit_params_from_arrays, calculate_mean_sigma_in_x_bins
 from rdf_analysis.analyses.hadrecoil_common import (
     NtupleProcessorRDF_hadrecoil,
     build_threshold_scan_observables,
@@ -28,6 +28,7 @@ def study_threshold_scans(proc, threshold_values):
     df_truth_particle_pt = proc.to_pandas(["met_truth_particle_pt"])
     df_truth_particle_eta = proc.to_pandas(["met_truth_particle_eta"])
     df_truth_particle_phi = proc.to_pandas(["met_truth_particle_phi"])
+    df_truth_particle_e = proc.to_pandas(["met_truth_particle_e"])
 
     df_clus_e_truth = proc.to_pandas(["clus_e_truth"])
     df_clus_e_em = proc.to_pandas(["clus_e_em"])
@@ -59,6 +60,7 @@ def study_threshold_scans(proc, threshold_values):
         truth_particle_pt = np.array(df_truth_particle_pt.iloc[event]["met_truth_particle_pt"])
         truth_particle_eta = np.array(df_truth_particle_eta.iloc[event]["met_truth_particle_eta"])
         truth_particle_phi = np.array(df_truth_particle_phi.iloc[event]["met_truth_particle_phi"])
+        truth_particle_e = np.array(df_truth_particle_e.iloc[event]["met_truth_particle_e"])
 
         qx = df_qx[event]
         qy = df_qy[event]
@@ -68,6 +70,7 @@ def study_threshold_scans(proc, threshold_values):
             truth_particle_pt,
             truth_particle_eta,
             truth_particle_phi,
+            truth_particle_e,
             threshold_values,
         )
 
@@ -133,6 +136,8 @@ def save_threshold_results(output_path, threshold_results):
 def save_threshold_results_as_hists(results):
     # make root histograms
 
+    qt_bin_edges = [0, 5, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100, 150, 250]
+
     # qT = vector pT sum of two leptons
     # this is not scale dependent. We only need one hist
     first_result = next(iter(results.values()))
@@ -147,6 +152,42 @@ def save_threshold_results_as_hists(results):
         make_numpy_hist(f"h_u_par_plus_qT_{calib_name}_{thr_label}",
                         f"u_par_plus_qT distribution for {calib_name} threshold {thr}",30, -30, 50, observables["u_par_plus_qT"]).Write()
 
+        qT = np.asarray(observables["qT"], dtype=np.float64)
+        u_perp = np.asarray(observables["u_perp"], dtype=np.float64)
+        uT = np.asarray(observables["uT"], dtype=np.float64)
+
+        # Build the same resolution observable as response study: sigma(u_perp)/mean(uT) vs qT.
+        _, sigma_u_perp = calculate_gaussian_fit_params_from_arrays(
+            qT,
+            u_perp,
+            qt_bin_edges,
+            y_name=f"u_perp_{calib_name}_{thr_label}",
+        )
+        mean_uT, _ = calculate_mean_sigma_in_x_bins(qT, uT, qt_bin_edges)
+
+        resolution = np.divide(
+            sigma_u_perp,
+            mean_uT,
+            out=np.full_like(sigma_u_perp, np.nan, dtype=np.float64),
+            where=np.isfinite(mean_uT) & (mean_uT != 0.0),
+        )
+
+        make_hist_from_bin_contents(
+            f"h_sigma_u_perp_{calib_name}_{thr_label}",
+            f"Sigma u_perp/mean(uT) for {calib_name} threshold {thr};qT;Sigma u_perp/mean(uT)",
+            qt_bin_edges,
+            resolution,
+        ).Write()
+
+        # Keep an explicit MET-truth-particle naming alias for easier downstream lookup.
+        if calib_name == "truth_particle":
+            make_hist_from_bin_contents(
+                f"h_sigma_u_perp_met_truth_particle_{thr_label}",
+                f"Sigma u_perp/mean(uT) for MET truth particles threshold {thr};qT;Sigma u_perp/mean(uT)",
+                qt_bin_edges,
+                resolution,
+            ).Write()
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run the hadrecoil threshold-scan study.")
@@ -160,7 +201,7 @@ def parse_args():
         nargs="+",
         type=float,
         default=[0.0, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0],
-        help="Thresholds in GeV for cluster energy and truth-particle pT scans.",
+        help="Thresholds in GeV for absolute momentum scans of both clusters and truth particles.",
     )
     return parser.parse_args()
 

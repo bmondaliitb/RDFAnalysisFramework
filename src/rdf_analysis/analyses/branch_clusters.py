@@ -7,6 +7,7 @@ Find branch clusters from the E_truth vs E_ML correlation plot.
 import argparse
 import sys
 from array import array
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -56,6 +57,33 @@ class NtupleProcessor_branch_clusters(NtupleProcessor):
     pass
 
 
+@dataclass
+class BranchClusterResults:
+    moment_values_all: dict
+    moment_values_offdiag: dict
+    moment_values_diag: dict
+    all_truth: list
+    all_ml: list
+    selected_truth: list
+    selected_ml: list
+    diag_truth: list
+    diag_ml: list
+
+    @classmethod
+    def empty(cls, moment_branches):
+        return cls(
+            {branch: [] for branch in moment_branches},
+            {branch: [] for branch in moment_branches},
+            {branch: [] for branch in moment_branches},
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+
+
 def get_moment_branches(proc, tree_name, include_tower_moments=False):
     branches = proc.branch_names()
     required = ["cluster_e_truth", "cluster_e_ML_correct"]
@@ -95,24 +123,57 @@ def eta_mask(jet_eta, abs_eta_min=None, abs_eta_max=None):
     return mask
 
 
+def cluster_energy_mask(cluster_truth, cluster_ml):
+    cluster_truth = np.asarray(cluster_truth, dtype=np.float64)
+    cluster_ml = np.asarray(cluster_ml, dtype=np.float64)
+    return np.isfinite(cluster_truth) & np.isfinite(cluster_ml) & (cluster_truth > 0) & (cluster_ml > 0)
+
+
 def offdiag_mask(cluster_truth, cluster_ml, width=0.2, scale="log", side="both", x_range=None, y_range=None):
+    cluster_truth = np.asarray(cluster_truth, dtype=np.float64)
+    cluster_ml = np.asarray(cluster_ml, dtype=np.float64)
+    valid_energy = cluster_energy_mask(cluster_truth, cluster_ml)
+    distance = np.full(cluster_truth.shape, np.nan, dtype=np.float64)
+
     if scale == "log":
-        distance = np.log10(cluster_ml / cluster_truth)
+        distance[valid_energy] = np.log10(cluster_ml[valid_energy] / cluster_truth[valid_energy])
     else:
-        distance = cluster_ml - cluster_truth
+        distance[valid_energy] = cluster_ml[valid_energy] - cluster_truth[valid_energy]
 
     if side == "above":
-        mask = distance > width
+        mask = valid_energy & (distance > width)
     elif side == "below":
-        mask = distance < -width
+        mask = valid_energy & (distance < -width)
     else:
-        mask = np.abs(distance) > width
+        mask = valid_energy & (np.abs(distance) > width)
 
     # Apply x and y range masks if provided
-    if x_range:
+    if x_range is not None:
         mask = mask & (x_range[0] < cluster_truth) & (cluster_truth < x_range[1])
 
-    if y_range:
+    if y_range is not None:
+        mask = mask & (y_range[0] < cluster_ml) & (cluster_ml < y_range[1])
+
+    return mask
+
+
+def diagonal_mask(cluster_truth, cluster_ml, width=0.2, scale="log", x_range=None, y_range=None):
+    cluster_truth = np.asarray(cluster_truth, dtype=np.float64)
+    cluster_ml = np.asarray(cluster_ml, dtype=np.float64)
+    valid_energy = cluster_energy_mask(cluster_truth, cluster_ml)
+    distance = np.full(cluster_truth.shape, np.nan, dtype=np.float64)
+
+    if scale == "log":
+        distance[valid_energy] = np.log10(cluster_ml[valid_energy] / cluster_truth[valid_energy])
+    else:
+        distance[valid_energy] = cluster_ml[valid_energy] - cluster_truth[valid_energy]
+
+    mask = valid_energy & (np.abs(distance) <= width)
+
+    if x_range is not None:
+        mask = mask & (x_range[0] < cluster_truth) & (cluster_truth < x_range[1])
+
+    if y_range is not None:
         mask = mask & (y_range[0] < cluster_ml) & (cluster_ml < y_range[1])
 
     return mask
@@ -135,15 +196,19 @@ def hist_range(values):
     return low - padding, high + padding
 
 
-def fill_th2(name, title, x_values, y_values, bin_edges):
+def fill_th2(name, title, x_values, y_values, bin_edges, write=True):
     bins = array("d", bin_edges.tolist())
     hist = ROOT.TH2D(name, title, len(bin_edges) - 1, bins, len(bin_edges) - 1, bins)
+    if not write:
+        hist.SetDirectory(0)
+
     mask = np.isfinite(x_values) & np.isfinite(y_values) & (x_values > 0) & (y_values > 0)
 
     for x_value, y_value in zip(x_values[mask], y_values[mask]):
         hist.Fill(float(x_value), float(y_value))
 
-    hist.Write()
+    if write:
+        hist.Write()
     return hist
 
 
@@ -165,14 +230,15 @@ def write_moment_histogram(hist_name, title, values, n_bins, range_values=None):
     hist.Write()
 
 
-def write_moment_histograms(moment_values_all, moment_values_offdiag, n_bins):
+def write_moment_histograms(moment_values_all, moment_values_offdiag, moment_values_diag, n_bins):
     for branch, all_values in moment_values_all.items():
         offdiag_values = moment_values_offdiag[branch]
+        diag_values = moment_values_diag[branch]
         range_values = all_values
 
         write_moment_histogram(
             f"h_branch_cluster_all_{branch}",
-            f"All selected-jet cluster {branch};{branch};Clusters",
+            f"All selected cluster {branch};{branch};Clusters",
             all_values,
             n_bins,
             range_values=range_values,
@@ -185,20 +251,22 @@ def write_moment_histograms(moment_values_all, moment_values_offdiag, n_bins):
             range_values=range_values,
         )
         write_moment_histogram(
-            f"h_branch_cluster_{branch}",
-            f"Off-diagonal cluster {branch};{branch};Clusters",
-            offdiag_values,
+            f"h_branch_cluster_very_diagonal_{branch}",
+            f"Very diagonal cluster {branch};{branch};Clusters",
+            diag_values,
             n_bins,
             range_values=range_values,
         )
 
 
-def write_energy_plot(all_truth, all_ml, selected_truth, selected_ml, args):
+def write_energy_plot(all_truth, all_ml, selected_truth, selected_ml, diag_truth, diag_ml, args):
     all_truth = np.asarray(all_truth, dtype=np.float64)
     all_ml = np.asarray(all_ml, dtype=np.float64)
     selected_truth = np.asarray(selected_truth, dtype=np.float64)
     selected_ml = np.asarray(selected_ml, dtype=np.float64)
-    bin_edges = _default_cluster_truth_energy_bin_edges(selected_truth, n_bins=args.energy_n_bins)
+    diag_truth = np.asarray(diag_truth, dtype=np.float64)
+    diag_ml = np.asarray(diag_ml, dtype=np.float64)
+    bin_edges = _default_cluster_truth_energy_bin_edges(all_truth, n_bins=args.energy_n_bins)
 
     h_all = fill_th2(
         "h2_cluster_energy_truth_vs_ml_all",
@@ -212,6 +280,13 @@ def write_energy_plot(all_truth, all_ml, selected_truth, selected_ml, args):
         "Selected off-diagonal clusters;E_{cluster}^{truth};E_{cluster}^{ML}",
         selected_truth,
         selected_ml,
+        bin_edges,
+    )
+    fill_th2(
+        "h2_cluster_energy_truth_vs_ml_very_diagonal",
+        "Selected very diagonal clusters;E_{cluster}^{truth};E_{cluster}^{ML}",
+        diag_truth,
+        diag_ml,
         bin_edges,
     )
 
@@ -272,245 +347,209 @@ def write_energy_plot(all_truth, all_ml, selected_truth, selected_ml, args):
     return png_path
 
 
-def append_cluster_selection(
-    cluster_truth,
-    cluster_ml,
-    moment_arrays,
-    moment_branches,
-    moment_values_all,
-    moment_values_offdiag,
-    all_truth,
-    all_ml,
-    selected_truth,
-    selected_ml,
-    args,
-    event_counter,
-    location,
-):
-    if len(cluster_truth) != len(cluster_ml):
-        print("[Error]:: Cluster size mismatch for event {}{}".format(event_counter, location))
-        sys.exit(1)
+class BranchClusterAnalysis:
+    def __init__(self, args):
+        self.args = args
+        self.proc = NtupleProcessor_branch_clusters(args.input, args.tree, args.nEvents)
+        self.proc.build_arrays()
+        self.moment_branches = get_moment_branches(self.proc, args.tree, args.include_tower_moments)
+        self.results = BranchClusterResults.empty(self.moment_branches)
 
-    finite_energy = np.isfinite(cluster_truth) & np.isfinite(cluster_ml)
-    all_truth.extend(cluster_truth[finite_energy].tolist())
-    all_ml.extend(cluster_ml[finite_energy].tolist())
+    def run(self):
+        print("[Info]:: Moment branches: {}".format(", ".join(self.moment_branches)))
 
-    mask = offdiag_mask(
-        cluster_truth,
-        cluster_ml,
-        width=args.offdiag_width,
-        scale=args.offdiag_scale,
-        side=args.offdiag_side,
-        x_range=args.offdiag_xrange,
-        y_range=args.offdiag_yrange,
-    )
+        if self.args.tree == "InJetEvents":
+            self.process_injet_events()
+        elif self.args.tree == "OutJetEvents":
+            self.process_outjet_events()
 
-    selected_truth.extend(cluster_truth[mask].tolist())
-    selected_ml.extend(cluster_ml[mask].tolist())
+        self.write_outputs()
 
-    for branch in moment_branches:
-        cluster_moment = moment_arrays[branch]
-        if len(cluster_moment) != len(mask):
-            print(
-                "[Error]:: Moment size mismatch for branch {}, event {}{}".format(
-                    branch,
-                    event_counter,
-                    location,
-                )
-            )
+    def append_cluster_selection(self, cluster_truth, cluster_ml, moment_arrays, event_counter, location):
+        if len(cluster_truth) != len(cluster_ml):
+            print("[Error]:: Cluster size mismatch for event {}{}".format(event_counter, location))
             sys.exit(1)
 
-        moment_values_all[branch].extend(cluster_moment[finite_energy].tolist())
-        moment_values_offdiag[branch].extend(cluster_moment[mask].tolist())
+        args = self.args
+        results = self.results
+        valid_energy = cluster_energy_mask(cluster_truth, cluster_ml)
+        results.all_truth.extend(cluster_truth[valid_energy].tolist())
+        results.all_ml.extend(cluster_ml[valid_energy].tolist())
 
+        mask = offdiag_mask(
+            cluster_truth,
+            cluster_ml,
+            width=args.offdiag_width,
+            scale=args.offdiag_scale,
+            side=args.offdiag_side,
+            x_range=args.offdiag_xrange,
+            y_range=args.offdiag_yrange,
+        )
+        diag_mask = diagonal_mask(
+            cluster_truth,
+            cluster_ml,
+            width=args.diag_width,
+            scale=args.diag_scale,
+            x_range=args.diag_xrange,
+            y_range=args.diag_yrange,
+        )
 
-def process_injet_events(
-    proc,
-    moment_branches,
-    moment_values_all,
-    moment_values_offdiag,
-    all_truth,
-    all_ml,
-    selected_truth,
-    selected_ml,
-    args,
-):
-    n_events = proc.n_events_to_process
-    columns = ["jet_eta", "cluster_e_truth", "cluster_e_ML_correct"] + moment_branches
-    event_counter = 0
+        results.selected_truth.extend(cluster_truth[mask].tolist())
+        results.selected_ml.extend(cluster_ml[mask].tolist())
+        results.diag_truth.extend(cluster_truth[diag_mask].tolist())
+        results.diag_ml.extend(cluster_ml[diag_mask].tolist())
 
-    for chunk in proc.iter_arrays(columns):
-        df_jet_eta = chunk["jet_eta"]
-        df_cluster_e_truth = chunk["cluster_e_truth"]
-        df_cluster_e_ML = chunk["cluster_e_ML_correct"]
-
-        for event in range(len(df_jet_eta)):
-            if event_counter % 10000 == 0:
-                print("[Info]:: Processing event {}/{}".format(event_counter, n_events))
-
-            jet_eta = to_numpy(df_jet_eta[event])
-            keep_jet = eta_mask(jet_eta, args.abs_eta_min, args.abs_eta_max)
-
-            if not (len(keep_jet) == len(df_cluster_e_truth[event]) == len(df_cluster_e_ML[event])):
+        for branch in self.moment_branches:
+            cluster_moment = moment_arrays[branch]
+            if len(cluster_moment) != len(mask):
                 print(
-                    "[Error]:: Number of jets does not match number of cluster energy entries for event {}".format(
+                    "[Error]:: Moment size mismatch for branch {}, event {}{}".format(
+                        branch,
                         event_counter,
+                        location,
                     )
                 )
                 sys.exit(1)
 
-            for branch in moment_branches:
-                if len(chunk[branch][event]) != len(keep_jet):
+            results.moment_values_all[branch].extend(cluster_moment[valid_energy].tolist())
+            results.moment_values_offdiag[branch].extend(cluster_moment[mask].tolist())
+            results.moment_values_diag[branch].extend(cluster_moment[diag_mask].tolist())
+
+    def process_injet_events(self):
+        args = self.args
+        n_events = self.proc.n_events_to_process
+        columns = ["jet_eta", "cluster_e_truth", "cluster_e_ML_correct"] + self.moment_branches
+        event_counter = 0
+
+        for chunk in self.proc.iter_arrays(columns):
+            df_jet_eta = chunk["jet_eta"]
+            df_cluster_e_truth = chunk["cluster_e_truth"]
+            df_cluster_e_ML = chunk["cluster_e_ML_correct"]
+
+            for event in range(len(df_jet_eta)):
+                if event_counter % 10000 == 0:
+                    print("[Info]:: Processing event {}/{}".format(event_counter, n_events))
+
+                jet_eta = to_numpy(df_jet_eta[event])
+                keep_jet = eta_mask(jet_eta, args.abs_eta_min, args.abs_eta_max)
+
+                if not (len(keep_jet) == len(df_cluster_e_truth[event]) == len(df_cluster_e_ML[event])):
                     print(
-                        "[Error]:: Number of jets does not match number of moment entries for branch {}, event {}".format(
-                            branch,
+                        "[Error]:: Number of jets does not match number of cluster energy entries for event {}".format(
                             event_counter,
                         )
                     )
                     sys.exit(1)
 
-            for jet in np.where(keep_jet)[0]:
-                jet = int(jet)
-                cluster_truth = to_numpy(df_cluster_e_truth[event][jet])
-                cluster_ml = to_numpy(df_cluster_e_ML[event][jet])
-                moment_arrays = {
-                    branch: to_numpy(chunk[branch][event][jet])
-                    for branch in moment_branches
-                }
+                for branch in self.moment_branches:
+                    if len(chunk[branch][event]) != len(keep_jet):
+                        print(
+                            "[Error]:: Number of jets does not match number of moment entries for branch {}, event {}".format(
+                                branch,
+                                event_counter,
+                            )
+                        )
+                        sys.exit(1)
 
-                append_cluster_selection(
+                for jet in np.where(keep_jet)[0]:
+                    jet = int(jet)
+                    cluster_truth = to_numpy(df_cluster_e_truth[event][jet])
+                    cluster_ml = to_numpy(df_cluster_e_ML[event][jet])
+                    moment_arrays = {
+                        branch: to_numpy(chunk[branch][event][jet])
+                        for branch in self.moment_branches
+                    }
+
+                    self.append_cluster_selection(
+                        cluster_truth,
+                        cluster_ml,
+                        moment_arrays,
+                        event_counter,
+                        ", jet {}".format(jet),
+                    )
+
+                event_counter += 1
+
+    def process_outjet_events(self):
+        args = self.args
+        n_events = self.proc.n_events_to_process
+        columns = ["cluster_eta", "cluster_e_truth", "cluster_e_ML_correct"] + self.moment_branches
+        event_counter = 0
+
+        for chunk in self.proc.iter_arrays(columns):
+            df_cluster_eta = chunk["cluster_eta"]
+            df_cluster_e_truth = chunk["cluster_e_truth"]
+            df_cluster_e_ML = chunk["cluster_e_ML_correct"]
+
+            for event in range(len(df_cluster_e_truth)):
+                if event_counter % 10000 == 0:
+                    print("[Info]:: Processing event {}/{}".format(event_counter, n_events))
+
+                cluster_eta = to_numpy(df_cluster_eta[event])
+                cluster_truth = to_numpy(df_cluster_e_truth[event])
+                cluster_ml = to_numpy(df_cluster_e_ML[event])
+
+                if not (len(cluster_eta) == len(cluster_truth) == len(cluster_ml)):
+                    print("[Error]:: Cluster size mismatch for event {}".format(event_counter))
+                    sys.exit(1)
+
+                keep_cluster = eta_mask(cluster_eta, args.abs_eta_min, args.abs_eta_max)
+                cluster_truth = cluster_truth[keep_cluster]
+                cluster_ml = cluster_ml[keep_cluster]
+
+                moment_arrays = {}
+                for branch in self.moment_branches:
+                    cluster_moment = to_numpy(chunk[branch][event])
+                    if len(cluster_moment) != len(keep_cluster):
+                        print("[Error]:: Moment size mismatch for branch {}, event {}".format(branch, event_counter))
+                        sys.exit(1)
+
+                    moment_arrays[branch] = cluster_moment[keep_cluster]
+
+                self.append_cluster_selection(
                     cluster_truth,
                     cluster_ml,
                     moment_arrays,
-                    moment_branches,
-                    moment_values_all,
-                    moment_values_offdiag,
-                    all_truth,
-                    all_ml,
-                    selected_truth,
-                    selected_ml,
-                    args,
                     event_counter,
-                    ", jet {}".format(jet),
+                    "",
                 )
 
-            event_counter += 1
+                event_counter += 1
 
+    def write_outputs(self):
+        args = self.args
+        results = self.results
+        output_file = ROOT.TFile(args.output, "RECREATE")
+        write_moment_histograms(
+            results.moment_values_all,
+            results.moment_values_offdiag,
+            results.moment_values_diag,
+            args.n_bins,
+        )
+        png_path = write_energy_plot(
+            results.all_truth,
+            results.all_ml,
+            results.selected_truth,
+            results.selected_ml,
+            results.diag_truth,
+            results.diag_ml,
+            args,
+        )
+        output_file.Close()
 
-def process_outjet_events(
-    proc,
-    moment_branches,
-    moment_values_all,
-    moment_values_offdiag,
-    all_truth,
-    all_ml,
-    selected_truth,
-    selected_ml,
-    args,
-):
-    n_events = proc.n_events_to_process
-    columns = ["cluster_eta", "cluster_e_truth", "cluster_e_ML_correct"] + moment_branches
-    event_counter = 0
-
-    for chunk in proc.iter_arrays(columns):
-        df_cluster_eta = chunk["cluster_eta"]
-        df_cluster_e_truth = chunk["cluster_e_truth"]
-        df_cluster_e_ML = chunk["cluster_e_ML_correct"]
-
-        for event in range(len(df_cluster_e_truth)):
-            if event_counter % 10000 == 0:
-                print("[Info]:: Processing event {}/{}".format(event_counter, n_events))
-
-            cluster_eta = to_numpy(df_cluster_eta[event])
-            cluster_truth = to_numpy(df_cluster_e_truth[event])
-            cluster_ml = to_numpy(df_cluster_e_ML[event])
-
-            if not (len(cluster_eta) == len(cluster_truth) == len(cluster_ml)):
-                print("[Error]:: Cluster size mismatch for event {}".format(event_counter))
-                sys.exit(1)
-
-            keep_cluster = eta_mask(cluster_eta, args.abs_eta_min, args.abs_eta_max)
-            cluster_truth = cluster_truth[keep_cluster]
-            cluster_ml = cluster_ml[keep_cluster]
-
-            moment_arrays = {}
-            for branch in moment_branches:
-                cluster_moment = to_numpy(chunk[branch][event])
-                if len(cluster_moment) != len(keep_cluster):
-                    print("[Error]:: Moment size mismatch for branch {}, event {}".format(branch, event_counter))
-                    sys.exit(1)
-
-                moment_arrays[branch] = cluster_moment[keep_cluster]
-
-            append_cluster_selection(
-                cluster_truth,
-                cluster_ml,
-                moment_arrays,
-                moment_branches,
-                moment_values_all,
-                moment_values_offdiag,
-                all_truth,
-                all_ml,
-                selected_truth,
-                selected_ml,
-                args,
-                event_counter,
-                "",
+        print(
+            "[Info]:: Wrote moment histograms for {} all clusters, {} off-diagonal clusters, and {} very diagonal clusters to {}".format(
+                len(results.all_truth),
+                len(results.selected_truth),
+                len(results.diag_truth),
+                args.output,
             )
-
-            event_counter += 1
+        )
+        print("[Info]:: Wrote E_truth vs E_ML selection plot to {}".format(png_path))
 
 
 def main(args):
-    proc = NtupleProcessor_branch_clusters(args.input, args.tree, args.nEvents)
-    proc.build_arrays()
-    moment_branches = get_moment_branches(proc, args.tree, args.include_tower_moments)
-    moment_values_all = {branch: [] for branch in moment_branches}
-    moment_values_offdiag = {branch: [] for branch in moment_branches}
-    all_truth = []
-    all_ml = []
-    selected_truth = []
-    selected_ml = []
-
-    print("[Info]:: Moment branches: {}".format(", ".join(moment_branches)))
-
-    if args.tree == "InJetEvents":
-        process_injet_events(
-            proc,
-            moment_branches,
-            moment_values_all,
-            moment_values_offdiag,
-            all_truth,
-            all_ml,
-            selected_truth,
-            selected_ml,
-            args,
-        )
-    elif args.tree == "OutJetEvents":
-        process_outjet_events(
-            proc,
-            moment_branches,
-            moment_values_all,
-            moment_values_offdiag,
-            all_truth,
-            all_ml,
-            selected_truth,
-            selected_ml,
-            args,
-        )
-
-    output_file = ROOT.TFile(args.output, "RECREATE")
-    write_moment_histograms(moment_values_all, moment_values_offdiag, args.n_bins)
-    png_path = write_energy_plot(all_truth, all_ml, selected_truth, selected_ml, args)
-    output_file.Close()
-
-    print(
-        "[Info]:: Wrote moment histograms for {} off-diagonal clusters to {}".format(
-            len(selected_truth),
-            args.output,
-        )
-    )
-    print("[Info]:: Wrote E_truth vs E_ML selection plot to {}".format(png_path))
+    BranchClusterAnalysis(args).run()
 
 
 if __name__ == "__main__":
@@ -526,6 +565,10 @@ if __name__ == "__main__":
     parser.add_argument("--offdiagSide", "--offdiag-side", dest="offdiag_side", choices=["both", "above", "below"], default="both")
     parser.add_argument("--offdiagXrange", "--offdiag-xrange", dest="offdiag_xrange", type=float, nargs='+', default=None)
     parser.add_argument("--offdiagYrange", "--offdiag-yrange", dest="offdiag_yrange", type=float, nargs='+', default=None)
+    parser.add_argument("--diagWidth", "--diag-width", dest="diag_width", type=float, default=0.2)
+    parser.add_argument("--diagScale", "--diag-scale", dest="diag_scale", choices=["log", "linear"], default="log")
+    parser.add_argument("--diagXrange", "--diag-xrange", dest="diag_xrange", type=float, nargs='+', default=None)
+    parser.add_argument("--diagYrange", "--diag-yrange", dest="diag_yrange", type=float, nargs='+', default=None)
     parser.add_argument("--includeTowerMoments", "--include-tower-moments", dest="include_tower_moments", action="store_true")
     parser.add_argument("--nBins", "--n-bins", dest="n_bins", type=int, default=100)
     parser.add_argument("--energyNBins", "--energy-n-bins", dest="energy_n_bins", type=int, default=100)

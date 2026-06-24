@@ -2,15 +2,15 @@ import numpy as np
 import ROOT
 
 
-def make_iqr_hist(hist_name, hist_title, x_bin_edges, sigma_iqr_values):
+def make_iqr_hist(hist_name, hist_title, x_bin_edges, sigma_iqr_values, x_title="p_{T}^{#mu} [GeV]", y_title="#sigma_{IQR}"):
     edges = np.asarray(x_bin_edges, dtype=np.float64)
     hist = ROOT.TH1D(hist_name, hist_title, len(edges) - 1, edges)
 
     for i, val in enumerate(sigma_iqr_values, start=1):
         hist.SetBinContent(i, float(val) if np.isfinite(val) else 0.0)
 
-    hist.GetXaxis().SetTitle("p_{T}^{#mu} [GeV]")
-    hist.GetYaxis().SetTitle("#sigma_{IQR}")
+    hist.GetXaxis().SetTitle(x_title)
+    hist.GetYaxis().SetTitle(y_title)
     return hist
 
 
@@ -62,4 +62,3 @@ def make_hist_from_bin_contents(hist_name, hist_title, bin_edges, bin_contents):
 
 def get_bins_log(x_min, x_max, nbins):
     return np.array(np.geomspace(x_min, x_max, nbins + 1))
-

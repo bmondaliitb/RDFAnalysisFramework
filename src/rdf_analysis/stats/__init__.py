@@ -1,4 +1,4 @@
-from .fits import calculate_gaussian_fit_params_from_arrays
+from .fits import calculate_gaussian_fit_params_from_arrays, calculate_sigma_iqr_in_x_bins
 from .histograms import (
     get_bins_log,
     make_hist_from_bin_contents,
@@ -9,6 +9,7 @@ from .histograms import (
 
 __all__ = [
     "calculate_gaussian_fit_params_from_arrays",
+    "calculate_sigma_iqr_in_x_bins",
     "get_bins_log",
     "make_hist_from_bin_contents",
     "make_iqr_hist",

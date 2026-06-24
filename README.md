@@ -14,4 +14,5 @@ python3 src/rdf_analysis/analyses/hadrecoil_threshold_scan.py --input input.root
 python3 src/rdf_analysis/analyses/hadrecoil_response_study.py --input input.root --tree myTree --output hadrecoil_study_2.root --nEvents 10000
 python3 src/rdf_analysis/analyses/hadrecoil_study_eta_region.py --input input.root --tree myTree --output hadrecoil_study_3.root --nEvents 10000
 python3 src/rdf_analysis/analyses/jet.py --input input.root --tree myTree --output jet.root --nEvents 10000
+python3 src/rdf_analysis/analyses/cluster.py --input input.root --tree myTree --output cluster.root --nEvents 10000
 ```

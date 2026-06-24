@@ -9,7 +9,10 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from rdf_analysis.core import NtupleProcessorRDF
-from rdf_analysis.stats import calculate_gaussian_fit_params_from_arrays, make_hist_from_bin_contents
+from rdf_analysis.stats import (
+    calculate_gaussian_fit_params_from_arrays,
+    make_hist_from_bin_contents,
+)
 
 DEBUG = False
 ROOT.gROOT.SetBatch(True)
@@ -29,13 +32,13 @@ class NtupleProcessorRDF_jet(NtupleProcessorRDF):
         df = df.Define("d_jet_phi_truth", "jet_phi_truth")
         df = df.Define("d_jet_e_truth", "jet_e_truth")
 
-        df = df.Define("d_cluster_pt", "cluster_pt_inJet")
-        df = df.Define("d_cluster_eta", "cluster_eta_inJet")
-        df = df.Define("d_cluster_phi", "cluster_phi_inJet")
-        df = df.Define("d_cluster_e_truth", "cluster_e_truth_inJet")
-        df = df.Define("d_cluster_e_EM", "cluster_e_EM_inJet")
-        df = df.Define("d_cluster_e_ML", "cluster_e_ML_inJet")
-        df = df.Define("d_cluster_e_LC", "cluster_e_LC_inJet")
+        df = df.Define("d_cluster_pt", "cluster_pt")
+        df = df.Define("d_cluster_eta", "cluster_eta")
+        df = df.Define("d_cluster_phi", "cluster_phi")
+        df = df.Define("d_cluster_e_truth", "cluster_e_truth")
+        df = df.Define("d_cluster_e_EM", "cluster_e_EM")
+        df = df.Define("d_cluster_e_ML", "cluster_e_ML_correct")
+        df = df.Define("d_cluster_e_LC", "cluster_e_LC")
 
         self.df = df
         return df
@@ -45,11 +48,30 @@ def get_jet_energy(df_e):
     return np.sum(df_e)
 
 
-def _default_x_bin_edges():
+def _jet_abs_eta_mask(jet_eta, jet_abs_eta_min, jet_abs_eta_max):
+    eta = np.asarray(jet_eta, dtype=np.float64)
+    abs_eta = np.abs(eta)
+    mask = np.isfinite(abs_eta)
+
+    if jet_abs_eta_min is not None:
+        mask &= abs_eta >= jet_abs_eta_min
+    if jet_abs_eta_max is not None:
+        mask &= abs_eta < jet_abs_eta_max
+
+    return mask
+
+
+#def _default_x_bin_edges():
+#    return [
+#        20, 30, 40, 45, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
+#        160, 200, 250, 300, 350, 400, 450, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700,
+#        1800, 1900, 2000, 2100, 2300, 2500, 2700, 2900, 3200, 3900, 5000,
+#    ]
+
+def _default_x_bin_edges(): # for forward region (high pt jets)
     return [
-        20, 30, 40, 45, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
-        160, 200, 250, 300, 350, 400, 450, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700,
-        1800, 1900, 2000, 2100, 2300, 2500, 2700, 2900, 3200, 3900, 5000,
+        20, 150, 200, 250, 300, 350, 400, 450, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1600,
+        1800, 2500, 4000
     ]
 
 
@@ -57,23 +79,20 @@ def _collect_event_data(proc):
     columns = [
         "d_jet_pt",
         "d_jet_eta",
-        "d_jet_phi",
         "d_jet_e_EM",
         "d_jet_pt_truth",
         "d_jet_e_truth",
-        "d_cluster_pt",
-        "d_cluster_eta",
-        "d_cluster_phi",
         "d_cluster_e_truth",
         "d_cluster_e_EM",
         "d_cluster_e_ML",
         "d_cluster_e_LC",
     ]
-    return {column: proc.to_pandas([column]) for column in columns}
+    return proc.to_numpy(columns)
 
 
-def _build_response_arrays(frames):
+def _build_response_arrays(frames, jet_abs_eta_min=None, jet_abs_eta_max=None):
     df_jet_pt = frames["d_jet_pt"]
+    df_jet_eta = frames["d_jet_eta"]
     df_jet_e_EM = frames["d_jet_e_EM"]
     df_jet_pt_truth = frames["d_jet_pt_truth"]
     df_jet_e_truth = frames["d_jet_e_truth"]
@@ -93,16 +112,45 @@ def _build_response_arrays(frames):
         if event_counter % 10000 == 0:
             print("[Info]:: Processing event {}/{}".format(event, total_events))
 
-        event_jet_pt = np.array(df_jet_pt.iloc[event]["d_jet_pt"])
-        event_jet_e_EM = np.array(df_jet_e_EM.iloc[event]["d_jet_e_EM"])
-        event_jet_pt_truth = np.array(df_jet_pt_truth.iloc[event]["d_jet_pt_truth"])
-        event_jet_e_truth = np.array(df_jet_e_truth.iloc[event]["d_jet_e_truth"])
+        event_jet_pt = np.array(df_jet_pt[event])
+        event_jet_eta = np.array(df_jet_eta[event])
+        event_jet_e_EM = np.array(df_jet_e_EM[event])
+        event_jet_pt_truth = np.array(df_jet_pt_truth[event])
+        event_jet_e_truth = np.array(df_jet_e_truth[event])
+
+        # verify size of number of jets and size of df_cluster_e_truth matches
+        if (len(event_jet_pt) != len(df_cluster_e_truth[event])):
+            print("[Error]:: Number of jets does not match number of cluster energy entries for event {}".format(event))
+            sys.exit(1)
+        if not (
+            len(event_jet_pt) == len(event_jet_eta)
+            == len(event_jet_e_EM) == len(event_jet_pt_truth)
+            == len(event_jet_e_truth)
+        ):
+            print("[Error]:: Number of jet entries does not match across branches for event {}".format(event))
+            sys.exit(1)
+
+        jet_eta_mask = _jet_abs_eta_mask(
+            event_jet_eta,
+            jet_abs_eta_min,
+            jet_abs_eta_max,
+        )
 
         for jet in range(len(event_jet_pt)):
-            event_cluster_e_truth = np.array(df_cluster_e_truth.iloc[event]["d_cluster_e_truth"][jet])
-            event_cluster_e_EM = np.array(df_cluster_e_EM.iloc[event]["d_cluster_e_EM"][jet])
-            event_cluster_e_ML = np.array(df_cluster_e_ML.iloc[event]["d_cluster_e_ML"][jet])
-            event_cluster_e_LC = np.array(df_cluster_e_LC.iloc[event]["d_cluster_e_LC"][jet])
+            if not jet_eta_mask[jet]:
+                continue
+
+            event_cluster_e_truth = np.array(df_cluster_e_truth[event][jet])
+            event_cluster_e_EM = np.array(df_cluster_e_EM[event][jet])
+            event_cluster_e_ML = np.array(df_cluster_e_ML[event][jet])
+            event_cluster_e_LC = np.array(df_cluster_e_LC[event][jet])
+
+            if not (
+                len(event_cluster_e_truth) == len(event_cluster_e_EM) ==
+                len(event_cluster_e_ML) == len(event_cluster_e_LC)
+            ):
+                print("[Error]:: Number of cluster entries does not match across scales for event {}, jet {}".format(event, jet))
+                sys.exit(1)
 
             jet_energy_recal_EM = get_jet_energy(event_cluster_e_EM)
             jet_energy_recal_ML = get_jet_energy(event_cluster_e_ML)
@@ -174,17 +222,24 @@ def _fit_response_metrics(response_data, x_bin_edges, out_file):
 
 def _write_histograms(metrics, x_bin_edges):
     for name, (mean_values, sigma_values) in metrics.items():
-        make_hist_from_bin_contents(f"h_sigma_{name}", "", x_bin_edges, sigma_values / mean_values).Write()
+        #make_hist_from_bin_contents(f"h_sigma_{name}", "", x_bin_edges, sigma_values / mean_values).Write()
+        make_hist_from_bin_contents(f"h_sigma_{name}", "", x_bin_edges, sigma_values).Write()
         make_hist_from_bin_contents(f"h_mean_{name}", "", x_bin_edges, mean_values).Write()
 
 
 def main(args, out_file=None):
+    jet_abs_eta_min = getattr(args, "abs_eta_min", None)
+    jet_abs_eta_max = getattr(args, "abs_eta_max", None)
 
     proc = NtupleProcessorRDF_jet(args.input, args.tree, args.nEvents)
     proc.build_dataframe()
 
     frames = _collect_event_data(proc)
-    response_data = _build_response_arrays(frames)
+    response_data = _build_response_arrays(
+        frames,
+        jet_abs_eta_min=jet_abs_eta_min,
+        jet_abs_eta_max=jet_abs_eta_max,
+    )
     x_bin_edges = _default_x_bin_edges()
 
     owned_out_file = out_file is None
@@ -209,10 +264,26 @@ def main(args, out_file=None):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Process jet tuples with RDF and save response histograms to ROOT.")
-    parser.add_argument("--input", required=True, help="Path to input ROOT file.")
+    parser.add_argument("--input", required=True, action='append', help="Path to input ROOT file.")
     parser.add_argument("--tree", required=True, help="Tree name.")
     parser.add_argument("--output", default="iqr_histograms.root", help="Output ROOT file path.")
-    parser.add_argument("--nEvents", type=int, default=10000, help="Number of events to process.")
+    parser.add_argument("--nEvents", type=int, default=-1, help="Number of events to process.")
+    parser.add_argument(
+        "--jetAbsEtaMin",
+        "--abs-eta-min",
+        dest="abs_eta_min",
+        type=float,
+        default=None,
+        help="Minimum jet |eta| to keep. Omit to leave the lower edge uncut.",
+    )
+    parser.add_argument(
+        "--jetAbsEtaMax",
+        "--abs-eta-max",
+        dest="abs_eta_max",
+        type=float,
+        default=None,
+        help="Maximum jet |eta| to keep, using an exclusive upper bound. Omit to leave the upper edge uncut.",
+    )
     return parser.parse_args()
 
 

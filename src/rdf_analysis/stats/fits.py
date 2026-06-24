@@ -149,3 +149,37 @@ def calculate_gaussian_fit_params_from_arrays(x, y, x_bin_edges, out_file=None, 
 
     return np.array(mean_values), np.array(sigma_values)
 
+
+def calculate_sigma_iqr_in_x_bins(x_variable, y_variable, x_bin_edges, min_entries=10):
+    x = np.asarray(x_variable, dtype=np.float64)
+    y = np.asarray(y_variable, dtype=np.float64)
+
+    mask = np.isfinite(x) & np.isfinite(y)
+    x = x[mask]
+    y = y[mask]
+
+    median_values = []
+    sigma_iqr68_values = []
+
+    for i in range(len(x_bin_edges) - 1):
+        x_low = x_bin_edges[i]
+        x_high = x_bin_edges[i + 1]
+
+        if i == len(x_bin_edges) - 2:
+            in_bin = (x >= x_low) & (x <= x_high)
+        else:
+            in_bin = (x >= x_low) & (x < x_high)
+
+        if np.count_nonzero(in_bin) < min_entries:
+            median_values.append(np.nan)
+            sigma_iqr68_values.append(np.nan)
+            continue
+
+        y_bin = y[in_bin]
+
+        q16, q50, q84 = np.quantile(y_bin, [0.16, 0.50, 0.84])
+
+        median_values.append(float(q50))
+        sigma_iqr68_values.append(float((q84 - q16) / 2.0))
+
+    return np.array(median_values), np.array(sigma_iqr68_values)

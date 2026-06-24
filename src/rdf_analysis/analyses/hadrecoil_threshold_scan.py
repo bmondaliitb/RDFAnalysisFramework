@@ -12,33 +12,48 @@ if __package__ in {None, ""}:
 from rdf_analysis.stats import make_hist_from_bin_contents, make_numpy_hist
 from rdf_analysis.stats.fits import calculate_gaussian_fit_params_from_arrays, calculate_mean_sigma_in_x_bins
 from rdf_analysis.analyses.hadrecoil_common import (
-    NtupleProcessorRDF_hadrecoil,
+    NtupleProcessor_hadrecoil,
     build_threshold_scan_observables,
     build_truth_particle_threshold_scan_observables,
 )
 
 
 def study_threshold_scans(proc, threshold_values):
-    df_qT = proc.to_pandas(["qT"])["qT"].to_numpy()
+    arrays = proc.to_numpy([
+        "qT",
+        "lep_pt",
+        "lep_eta",
+        "lep_phi",
+        "met_truth_particle_pt",
+        "met_truth_particle_eta",
+        "met_truth_particle_phi",
+        "met_truth_particle_e",
+        "clus_e_truth",
+        "clus_e_em",
+        "clus_e_lcw",
+        "clus_e_ml",
+        "clus_eta",
+        "clus_phi",
+        "q_x",
+        "q_y",
+    ])
 
-    df_lep_pt = proc.to_pandas(["lep_pt"])
-    df_lep_eta = proc.to_pandas(["lep_eta"])
-    df_lep_phi = proc.to_pandas(["lep_phi"])
-
-    df_truth_particle_pt = proc.to_pandas(["met_truth_particle_pt"])
-    df_truth_particle_eta = proc.to_pandas(["met_truth_particle_eta"])
-    df_truth_particle_phi = proc.to_pandas(["met_truth_particle_phi"])
-    df_truth_particle_e = proc.to_pandas(["met_truth_particle_e"])
-
-    df_clus_e_truth = proc.to_pandas(["clus_e_truth"])
-    df_clus_e_em = proc.to_pandas(["clus_e_em"])
-    df_clus_e_lcw = proc.to_pandas(["clus_e_lcw"])
-    df_clus_e_ml = proc.to_pandas(["clus_e_ml"])
-    df_clus_eta = proc.to_pandas(["clus_eta"])
-    df_clus_phi = proc.to_pandas(["clus_phi"])
-
-    df_qx = proc.to_pandas(["q_x"])["q_x"].to_numpy()
-    df_qy = proc.to_pandas(["q_y"])["q_y"].to_numpy()
+    df_qT = arrays["qT"]
+    df_lep_pt = arrays["lep_pt"]
+    df_lep_eta = arrays["lep_eta"]
+    df_lep_phi = arrays["lep_phi"]
+    df_truth_particle_pt = arrays["met_truth_particle_pt"]
+    df_truth_particle_eta = arrays["met_truth_particle_eta"]
+    df_truth_particle_phi = arrays["met_truth_particle_phi"]
+    df_truth_particle_e = arrays["met_truth_particle_e"]
+    df_clus_e_truth = arrays["clus_e_truth"]
+    df_clus_e_em = arrays["clus_e_em"]
+    df_clus_e_lcw = arrays["clus_e_lcw"]
+    df_clus_e_ml = arrays["clus_e_ml"]
+    df_clus_eta = arrays["clus_eta"]
+    df_clus_phi = arrays["clus_phi"]
+    df_qx = arrays["q_x"]
+    df_qy = arrays["q_y"]
     df_qT_safe = np.maximum(df_qT, 1e-9)
 
     threshold_results = {}
@@ -53,14 +68,14 @@ def study_threshold_scans(proc, threshold_values):
         if event % 10000 == 0:
             print(f"[Info]:: Threshold scan event {event}/{total_events}")
 
-        lep_pt = np.array(df_lep_pt.iloc[event]["lep_pt"])
-        lep_eta = np.array(df_lep_eta.iloc[event]["lep_eta"])
-        lep_phi = np.array(df_lep_phi.iloc[event]["lep_phi"])
+        lep_pt = np.asarray(df_lep_pt[event], dtype=np.float64)
+        lep_eta = np.asarray(df_lep_eta[event], dtype=np.float64)
+        lep_phi = np.asarray(df_lep_phi[event], dtype=np.float64)
 
-        truth_particle_pt = np.array(df_truth_particle_pt.iloc[event]["met_truth_particle_pt"])
-        truth_particle_eta = np.array(df_truth_particle_eta.iloc[event]["met_truth_particle_eta"])
-        truth_particle_phi = np.array(df_truth_particle_phi.iloc[event]["met_truth_particle_phi"])
-        truth_particle_e = np.array(df_truth_particle_e.iloc[event]["met_truth_particle_e"])
+        truth_particle_pt = np.asarray(df_truth_particle_pt[event], dtype=np.float64)
+        truth_particle_eta = np.asarray(df_truth_particle_eta[event], dtype=np.float64)
+        truth_particle_phi = np.asarray(df_truth_particle_phi[event], dtype=np.float64)
+        truth_particle_e = np.asarray(df_truth_particle_e[event], dtype=np.float64)
 
         qx = df_qx[event]
         qy = df_qy[event]
@@ -87,16 +102,16 @@ def study_threshold_scans(proc, threshold_values):
             threshold_results[("truth_particle", thr)]["u_perp"].append(u_perp)
             threshold_results[("truth_particle", thr)]["u_par_plus_qT"].append(u_par_plus_qT)
 
-        clus_eta = np.array(df_clus_eta.iloc[event]["clus_eta"])
-        clus_phi = np.array(df_clus_phi.iloc[event]["clus_phi"])
+        clus_eta = np.asarray(df_clus_eta[event], dtype=np.float64)
+        clus_phi = np.asarray(df_clus_phi[event], dtype=np.float64)
 
-        for calib_name, df_clus_e, clus_e_name in [
-            ("cluster_e_truth", df_clus_e_truth, "clus_e_truth"),
-            ("em", df_clus_e_em, "clus_e_em"),
-            ("lcw", df_clus_e_lcw, "clus_e_lcw"),
-            ("ml", df_clus_e_ml, "clus_e_ml"),
+        for calib_name, df_clus_e in [
+            ("cluster_e_truth", df_clus_e_truth),
+            ("em", df_clus_e_em),
+            ("lcw", df_clus_e_lcw),
+            ("ml", df_clus_e_ml),
         ]:
-            clus_e = np.array(df_clus_e.iloc[event][clus_e_name])
+            clus_e = np.asarray(df_clus_e[event], dtype=np.float64)
             scan_out = build_threshold_scan_observables(
                 lep_pt,
                 lep_eta,
@@ -208,8 +223,8 @@ def parse_args():
 
 def main(args):
 
-    proc = NtupleProcessorRDF_hadrecoil(args.input, args.tree, args.nEvents)
-    proc.build_dataframe()
+    proc = NtupleProcessor_hadrecoil(args.input, args.tree, args.nEvents)
+    proc.build_arrays()
     results = study_threshold_scans(proc, args.thresholds)
     save_threshold_results(args.output_npz, results)
 

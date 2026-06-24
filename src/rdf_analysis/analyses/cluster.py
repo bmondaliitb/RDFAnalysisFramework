@@ -9,7 +9,7 @@ import ROOT
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from rdf_analysis.core import NtupleProcessorRDF
+from rdf_analysis.core import NtupleProcessor, awkward_to_numpy
 from rdf_analysis.stats import (
     calculate_sigma_iqr_in_x_bins,
     get_bins_log,
@@ -19,19 +19,12 @@ from rdf_analysis.stats import (
 ROOT.gROOT.SetBatch(True)
 
 
-class NtupleProcessorRDF_cluster(NtupleProcessorRDF):
-    def build_dataframe(self):
-        df = self.df
+class NtupleProcessor_cluster(NtupleProcessor):
+    pass
 
-        df = df.Define("d_cluster_eta", "cluster_eta")
-        df = df.Define("d_cluster_e_truth", "cluster_e_truth")
-        df = df.Define("d_cluster_e_EM", "cluster_e_EM")
-        df = df.Define("d_cluster_e_ML", "cluster_e_ML_correct")
-        df = df.Define("d_cluster_e_LC", "cluster_e_LC")
 
-        self.df = df
-        return df
-
+def to_numpy(values):
+    return awkward_to_numpy(values)
 
 
 def _cluster_abs_eta_mask(cluster_eta, cluster_abs_eta_min, cluster_abs_eta_max):
@@ -88,14 +81,14 @@ def _default_cluster_response_bin_edges(cluster_response_dict, n_bins=10000):
 
 def _collect_event_data(proc):
     columns = [
-        "d_cluster_e_truth",
-        "d_cluster_e_EM",
-        "d_cluster_e_ML",
-        "d_cluster_e_LC",
-        "d_cluster_eta",
+        "cluster_e_truth",
+        "cluster_e_EM",
+        "cluster_e_ML_correct",
+        "cluster_e_LC",
+        "cluster_eta",
     ]
 
-    return proc.to_numpy(columns)
+    return proc.iter_arrays(columns)
 
 
 def _empty_cluster_arrays():
@@ -132,46 +125,102 @@ def _to_numpy_cluster_data(cluster_data):
     }
 
 
-def _build_response_arrays(frames, cluster_abs_eta_min=None, cluster_abs_eta_max=None):
-    df_cluster_e_truth = frames["d_cluster_e_truth"]
-    df_cluster_e_EM = frames["d_cluster_e_EM"]
-    df_cluster_e_ML = frames["d_cluster_e_ML"]
-    df_cluster_e_LC = frames["d_cluster_e_LC"]
-    df_cluster_eta = frames["d_cluster_eta"]
-
+def _build_response_arrays(frames, total_events, cluster_abs_eta_min=None, cluster_abs_eta_max=None):
     cluster_data = _empty_cluster_arrays()
+    event_counter = 0
 
-    total_events = df_cluster_e_truth.shape[0]
-    for event in range(total_events):
-        if event % 10000 == 0:
-            print("[Info]:: Processing event {}/{}".format(event, total_events))
+    for chunk in frames:
+        df_cluster_e_truth = chunk["cluster_e_truth"]
+        df_cluster_e_EM = chunk["cluster_e_EM"]
+        df_cluster_e_ML = chunk["cluster_e_ML_correct"]
+        df_cluster_e_LC = chunk["cluster_e_LC"]
+        df_cluster_eta = chunk["cluster_eta"]
 
-        event_cluster_e_truth = df_cluster_e_truth[event]
-        event_cluster_e_EM = df_cluster_e_EM[event]
-        event_cluster_e_ML = df_cluster_e_ML[event]
-        event_cluster_e_LC = df_cluster_e_LC[event]
-        event_cluster_eta = df_cluster_eta[event]
+        for event in range(len(df_cluster_e_truth)):
+            if event_counter % 10000 == 0:
+                print("[Info]:: Processing event {}/{}".format(event_counter, total_events))
 
-        if not (
-            len(event_cluster_e_truth) == len(event_cluster_e_EM)
-            == len(event_cluster_e_ML) == len(event_cluster_e_LC)
-        ):
-            print("[Error]:: Number of cluster groups does not match across scales for event {}".format(event))
-            sys.exit(1)
-
-        for jet in range(len(event_cluster_e_truth)):
-            cluster_truth = np.array(event_cluster_e_truth[jet])
-            cluster_em = np.array(event_cluster_e_EM[jet])
-            cluster_ml = np.array(event_cluster_e_ML[jet])
-            cluster_lc = np.array(event_cluster_e_LC[jet])
-            cluster_eta = np.array(event_cluster_eta[jet])
+            event_cluster_e_truth = df_cluster_e_truth[event]
+            event_cluster_e_EM = df_cluster_e_EM[event]
+            event_cluster_e_ML = df_cluster_e_ML[event]
+            event_cluster_e_LC = df_cluster_e_LC[event]
+            event_cluster_eta = df_cluster_eta[event]
 
             if not (
-                len(cluster_truth) == len(cluster_em)
-                == len(cluster_ml) == len(cluster_lc)
+                len(event_cluster_e_truth) == len(event_cluster_e_EM)
+                == len(event_cluster_e_ML) == len(event_cluster_e_LC)
             ):
-                print("[Error]:: Number of cluster entries does not match across scales for event {}, jet {}".format(event, jet))
+                print("[Error]:: Number of cluster groups does not match across scales for event {}".format(event_counter))
                 sys.exit(1)
+
+            for jet in range(len(event_cluster_e_truth)):
+                cluster_truth = to_numpy(event_cluster_e_truth[jet])
+                cluster_em = to_numpy(event_cluster_e_EM[jet])
+                cluster_ml = to_numpy(event_cluster_e_ML[jet])
+                cluster_lc = to_numpy(event_cluster_e_LC[jet])
+                cluster_eta = to_numpy(event_cluster_eta[jet])
+
+                if not (
+                    len(cluster_truth) == len(cluster_em)
+                    == len(cluster_ml) == len(cluster_lc)
+                ):
+                    print("[Error]:: Number of cluster entries does not match across scales for event {}, jet {}".format(event_counter, jet))
+                    sys.exit(1)
+
+                eta_mask = _cluster_abs_eta_mask(
+                    cluster_eta,
+                    cluster_abs_eta_min,
+                    cluster_abs_eta_max,
+                )
+                cluster_truth = cluster_truth[eta_mask]
+                cluster_em = cluster_em[eta_mask]
+                cluster_ml = cluster_ml[eta_mask]
+                cluster_lc = cluster_lc[eta_mask]
+
+                _append_cluster_response(cluster_data, cluster_truth, cluster_em, cluster_ml, cluster_lc)
+
+            event_counter += 1
+
+    arrays = _to_numpy_cluster_data(cluster_data)
+
+    return {
+        "cluster_energy_dict": arrays["energy"],
+        "cluster_response_dict": arrays["response"],
+    }
+
+def _build_response_arrays_outjet_clusters(frames, total_events, cluster_abs_eta_min=None, cluster_abs_eta_max=None):
+    cluster_data = _empty_cluster_arrays()
+    event_counter = 0
+
+    for chunk in frames:
+        df_cluster_e_truth = chunk["cluster_e_truth"]
+        df_cluster_e_EM = chunk["cluster_e_EM"]
+        df_cluster_e_ML = chunk["cluster_e_ML_correct"]
+        df_cluster_e_LC = chunk["cluster_e_LC"]
+        df_cluster_eta = chunk["cluster_eta"]
+
+        for event in range(len(df_cluster_e_truth)):
+            if event_counter % 10000 == 0:
+                print("[Info]:: Processing event {}/{}".format(event_counter, total_events))
+
+            event_cluster_e_truth = df_cluster_e_truth[event]
+            event_cluster_e_EM = df_cluster_e_EM[event]
+            event_cluster_e_ML = df_cluster_e_ML[event]
+            event_cluster_e_LC = df_cluster_e_LC[event]
+            event_cluster_eta = df_cluster_eta[event]
+
+            if not (
+                len(event_cluster_e_truth) == len(event_cluster_e_EM)
+                == len(event_cluster_e_ML) == len(event_cluster_e_LC)
+            ):
+                print("[Error]:: Number of cluster groups does not match across scales for event {}".format(event_counter))
+                sys.exit(1)
+
+            cluster_truth = to_numpy(event_cluster_e_truth)
+            cluster_em = to_numpy(event_cluster_e_EM)
+            cluster_ml = to_numpy(event_cluster_e_ML)
+            cluster_lc = to_numpy(event_cluster_e_LC)
+            cluster_eta = to_numpy(event_cluster_eta)
 
             eta_mask = _cluster_abs_eta_mask(
                 cluster_eta,
@@ -184,58 +233,7 @@ def _build_response_arrays(frames, cluster_abs_eta_min=None, cluster_abs_eta_max
             cluster_lc = cluster_lc[eta_mask]
 
             _append_cluster_response(cluster_data, cluster_truth, cluster_em, cluster_ml, cluster_lc)
-
-    arrays = _to_numpy_cluster_data(cluster_data)
-
-    return {
-        "cluster_energy_dict": arrays["energy"],
-        "cluster_response_dict": arrays["response"],
-    }
-
-def _build_response_arrays_outjet_clusters(frames, cluster_abs_eta_min=None, cluster_abs_eta_max=None):
-    df_cluster_e_truth = frames["d_cluster_e_truth"]
-    df_cluster_e_EM = frames["d_cluster_e_EM"]
-    df_cluster_e_ML = frames["d_cluster_e_ML"]
-    df_cluster_e_LC = frames["d_cluster_e_LC"]
-    df_cluster_eta = frames["d_cluster_eta"]
-
-    cluster_data = _empty_cluster_arrays()
-
-    total_events = df_cluster_e_truth.shape[0]
-    for event in range(total_events):
-        if event % 10000 == 0:
-            print("[Info]:: Processing event {}/{}".format(event, total_events))
-
-        event_cluster_e_truth = df_cluster_e_truth[event]
-        event_cluster_e_EM = df_cluster_e_EM[event]
-        event_cluster_e_ML = df_cluster_e_ML[event]
-        event_cluster_e_LC = df_cluster_e_LC[event]
-        event_cluster_eta = df_cluster_eta[event]
-
-        if not (
-            len(event_cluster_e_truth) == len(event_cluster_e_EM)
-            == len(event_cluster_e_ML) == len(event_cluster_e_LC)
-        ):
-            print("[Error]:: Number of cluster groups does not match across scales for event {}".format(event))
-            sys.exit(1)
-
-        cluster_truth = np.array(event_cluster_e_truth)
-        cluster_em = np.array(event_cluster_e_EM)
-        cluster_ml = np.array(event_cluster_e_ML)
-        cluster_lc = np.array(event_cluster_e_LC)
-        cluster_eta = np.array(event_cluster_eta)
-
-        eta_mask = _cluster_abs_eta_mask(
-            cluster_eta,
-            cluster_abs_eta_min,
-            cluster_abs_eta_max,
-        )
-        cluster_truth = cluster_truth[eta_mask]
-        cluster_em = cluster_em[eta_mask]
-        cluster_ml = cluster_ml[eta_mask]
-        cluster_lc = cluster_lc[eta_mask]
-
-        _append_cluster_response(cluster_data, cluster_truth, cluster_em, cluster_ml, cluster_lc)
+            event_counter += 1
 
     arrays = _to_numpy_cluster_data(cluster_data)
 
@@ -360,20 +358,22 @@ def main(args, out_file=None):
     cluster_abs_eta_min = args.abs_eta_min
     cluster_abs_eta_max = args.abs_eta_max
 
-    proc = NtupleProcessorRDF_cluster(args.input, args.tree, args.nEvents)
-    proc.build_dataframe()
+    proc = NtupleProcessor_cluster(args.input, args.tree, args.nEvents)
+    proc.build_arrays()
 
     frames = _collect_event_data(proc)
     # For OutJetTree, the clusters are vector<double> per event, while for InJetEvents vector<vector<double>>
     if args.tree == "InJetEvents":
       response_data = _build_response_arrays(
           frames,
+          proc.n_events_to_process,
           cluster_abs_eta_min=cluster_abs_eta_min,
           cluster_abs_eta_max=cluster_abs_eta_max,
       )
     if args.tree == "OutJetEvents":
         response_data = _build_response_arrays_outjet_clusters(
             frames,
+            proc.n_events_to_process,
             cluster_abs_eta_min=cluster_abs_eta_min,
             cluster_abs_eta_max=cluster_abs_eta_max,
         )
@@ -424,7 +424,7 @@ def main(args, out_file=None):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Process cluster tuples with RDF and save response histograms to ROOT.")
+    parser = argparse.ArgumentParser(description="Process cluster tuples with uproot/awkward and save response histograms to ROOT.")
     parser.add_argument("--input", required=True, action="append", help="Path to input ROOT file.")
     parser.add_argument("--tree", required=True, help="Tree name.")
     parser.add_argument("--output", default="cluster.root", help="Output ROOT file path.")

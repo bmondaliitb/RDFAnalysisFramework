@@ -8,7 +8,7 @@ import sys
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from rdf_analysis.core import NtupleProcessorRDF
+from rdf_analysis.core import NtupleProcessor, awkward_to_numpy
 from rdf_analysis.stats import (
     calculate_gaussian_fit_params_from_arrays,
     make_hist_from_bin_contents,
@@ -18,30 +18,12 @@ DEBUG = False
 ROOT.gROOT.SetBatch(True)
 
 
-class NtupleProcessorRDF_jet(NtupleProcessorRDF):
-    def build_dataframe(self):
-        df = self.df
+class NtupleProcessor_jet(NtupleProcessor):
+    pass
 
-        df = df.Define("d_jet_pt", "jet_pt")
-        df = df.Define("d_jet_eta", "jet_eta")
-        df = df.Define("d_jet_phi", "jet_phi")
-        df = df.Define("d_jet_m", "jet_m")
-        df = df.Define("d_jet_e_EM", "jet_e_EM")
-        df = df.Define("d_jet_pt_truth", "jet_pt_truth")
-        df = df.Define("d_jet_eta_truth", "jet_eta_truth")
-        df = df.Define("d_jet_phi_truth", "jet_phi_truth")
-        df = df.Define("d_jet_e_truth", "jet_e_truth")
 
-        df = df.Define("d_cluster_pt", "cluster_pt")
-        df = df.Define("d_cluster_eta", "cluster_eta")
-        df = df.Define("d_cluster_phi", "cluster_phi")
-        df = df.Define("d_cluster_e_truth", "cluster_e_truth")
-        df = df.Define("d_cluster_e_EM", "cluster_e_EM")
-        df = df.Define("d_cluster_e_ML", "cluster_e_ML_correct")
-        df = df.Define("d_cluster_e_LC", "cluster_e_LC")
-
-        self.df = df
-        return df
+def to_numpy(values):
+    return awkward_to_numpy(values)
 
 
 def get_jet_energy(df_e):
@@ -77,97 +59,97 @@ def _default_x_bin_edges(): # for forward region (high pt jets)
 
 def _collect_event_data(proc):
     columns = [
-        "d_jet_pt",
-        "d_jet_eta",
-        "d_jet_e_EM",
-        "d_jet_pt_truth",
-        "d_jet_e_truth",
-        "d_cluster_e_truth",
-        "d_cluster_e_EM",
-        "d_cluster_e_ML",
-        "d_cluster_e_LC",
+        "jet_pt",
+        "jet_eta",
+        "jet_e_EM",
+        "jet_pt_truth",
+        "jet_e_truth",
+        "cluster_e_truth",
+        "cluster_e_EM",
+        "cluster_e_ML_correct",
+        "cluster_e_LC",
     ]
-    return proc.to_numpy(columns)
+    return proc.iter_arrays(columns)
 
 
-def _build_response_arrays(frames, jet_abs_eta_min=None, jet_abs_eta_max=None):
-    df_jet_pt = frames["d_jet_pt"]
-    df_jet_eta = frames["d_jet_eta"]
-    df_jet_e_EM = frames["d_jet_e_EM"]
-    df_jet_pt_truth = frames["d_jet_pt_truth"]
-    df_jet_e_truth = frames["d_jet_e_truth"]
-    df_cluster_e_truth = frames["d_cluster_e_truth"]
-    df_cluster_e_EM = frames["d_cluster_e_EM"]
-    df_cluster_e_ML = frames["d_cluster_e_ML"]
-    df_cluster_e_LC = frames["d_cluster_e_LC"]
-
-    total_events = df_jet_pt.shape[0]
+def _build_response_arrays(frames, total_events, jet_abs_eta_min=None, jet_abs_eta_max=None):
     event_counter = 0
 
     jet_energy_recal_dict = {"EM": [], "ML": [], "LC": [], "truth": []}
     jet_pt_dict = {"EM": [], "truth": []}
     jet_energy_dict = {"EM": [], "truth": []}
 
-    for event in range(total_events):
-        if event_counter % 10000 == 0:
-            print("[Info]:: Processing event {}/{}".format(event, total_events))
+    for chunk in frames:
+        df_jet_pt = chunk["jet_pt"]
+        df_jet_eta = chunk["jet_eta"]
+        df_jet_e_EM = chunk["jet_e_EM"]
+        df_jet_pt_truth = chunk["jet_pt_truth"]
+        df_jet_e_truth = chunk["jet_e_truth"]
+        df_cluster_e_truth = chunk["cluster_e_truth"]
+        df_cluster_e_EM = chunk["cluster_e_EM"]
+        df_cluster_e_ML = chunk["cluster_e_ML_correct"]
+        df_cluster_e_LC = chunk["cluster_e_LC"]
 
-        event_jet_pt = np.array(df_jet_pt[event])
-        event_jet_eta = np.array(df_jet_eta[event])
-        event_jet_e_EM = np.array(df_jet_e_EM[event])
-        event_jet_pt_truth = np.array(df_jet_pt_truth[event])
-        event_jet_e_truth = np.array(df_jet_e_truth[event])
+        for event in range(len(df_jet_pt)):
+            if event_counter % 10000 == 0:
+                print("[Info]:: Processing event {}/{}".format(event_counter, total_events))
 
-        # verify size of number of jets and size of df_cluster_e_truth matches
-        if (len(event_jet_pt) != len(df_cluster_e_truth[event])):
-            print("[Error]:: Number of jets does not match number of cluster energy entries for event {}".format(event))
-            sys.exit(1)
-        if not (
-            len(event_jet_pt) == len(event_jet_eta)
-            == len(event_jet_e_EM) == len(event_jet_pt_truth)
-            == len(event_jet_e_truth)
-        ):
-            print("[Error]:: Number of jet entries does not match across branches for event {}".format(event))
-            sys.exit(1)
+            event_jet_pt = to_numpy(df_jet_pt[event])
+            event_jet_eta = to_numpy(df_jet_eta[event])
+            event_jet_e_EM = to_numpy(df_jet_e_EM[event])
+            event_jet_pt_truth = to_numpy(df_jet_pt_truth[event])
+            event_jet_e_truth = to_numpy(df_jet_e_truth[event])
 
-        jet_eta_mask = _jet_abs_eta_mask(
-            event_jet_eta,
-            jet_abs_eta_min,
-            jet_abs_eta_max,
-        )
-
-        for jet in range(len(event_jet_pt)):
-            if not jet_eta_mask[jet]:
-                continue
-
-            event_cluster_e_truth = np.array(df_cluster_e_truth[event][jet])
-            event_cluster_e_EM = np.array(df_cluster_e_EM[event][jet])
-            event_cluster_e_ML = np.array(df_cluster_e_ML[event][jet])
-            event_cluster_e_LC = np.array(df_cluster_e_LC[event][jet])
-
+            # verify size of number of jets and size of df_cluster_e_truth matches
+            if (len(event_jet_pt) != len(df_cluster_e_truth[event])):
+                print("[Error]:: Number of jets does not match number of cluster energy entries for event {}".format(event_counter))
+                sys.exit(1)
             if not (
-                len(event_cluster_e_truth) == len(event_cluster_e_EM) ==
-                len(event_cluster_e_ML) == len(event_cluster_e_LC)
+                len(event_jet_pt) == len(event_jet_eta)
+                == len(event_jet_e_EM) == len(event_jet_pt_truth)
+                == len(event_jet_e_truth)
             ):
-                print("[Error]:: Number of cluster entries does not match across scales for event {}, jet {}".format(event, jet))
+                print("[Error]:: Number of jet entries does not match across branches for event {}".format(event_counter))
                 sys.exit(1)
 
-            jet_energy_recal_EM = get_jet_energy(event_cluster_e_EM)
-            jet_energy_recal_ML = get_jet_energy(event_cluster_e_ML)
-            jet_energy_recal_LC = get_jet_energy(event_cluster_e_LC)
-            jet_energy_recal_truth = get_jet_energy(event_cluster_e_truth)
+            jet_eta_mask = _jet_abs_eta_mask(
+                event_jet_eta,
+                jet_abs_eta_min,
+                jet_abs_eta_max,
+            )
 
-            jet_energy_recal_dict["EM"].append(jet_energy_recal_EM)
-            jet_energy_recal_dict["ML"].append(jet_energy_recal_ML)
-            jet_energy_recal_dict["LC"].append(jet_energy_recal_LC)
-            jet_energy_recal_dict["truth"].append(jet_energy_recal_truth)
+            for jet in range(len(event_jet_pt)):
+                if not jet_eta_mask[jet]:
+                    continue
 
-            jet_pt_dict["EM"].append(event_jet_pt[jet])
-            jet_pt_dict["truth"].append(event_jet_pt_truth[jet])
-            jet_energy_dict["EM"].append(event_jet_e_EM[jet])
-            jet_energy_dict["truth"].append(event_jet_e_truth[jet])
+                event_cluster_e_truth = to_numpy(df_cluster_e_truth[event][jet])
+                event_cluster_e_EM = to_numpy(df_cluster_e_EM[event][jet])
+                event_cluster_e_ML = to_numpy(df_cluster_e_ML[event][jet])
+                event_cluster_e_LC = to_numpy(df_cluster_e_LC[event][jet])
 
-        event_counter += 1
+                if not (
+                    len(event_cluster_e_truth) == len(event_cluster_e_EM) ==
+                    len(event_cluster_e_ML) == len(event_cluster_e_LC)
+                ):
+                    print("[Error]:: Number of cluster entries does not match across scales for event {}, jet {}".format(event_counter, jet))
+                    sys.exit(1)
+
+                jet_energy_recal_EM = get_jet_energy(event_cluster_e_EM)
+                jet_energy_recal_ML = get_jet_energy(event_cluster_e_ML)
+                jet_energy_recal_LC = get_jet_energy(event_cluster_e_LC)
+                jet_energy_recal_truth = get_jet_energy(event_cluster_e_truth)
+
+                jet_energy_recal_dict["EM"].append(jet_energy_recal_EM)
+                jet_energy_recal_dict["ML"].append(jet_energy_recal_ML)
+                jet_energy_recal_dict["LC"].append(jet_energy_recal_LC)
+                jet_energy_recal_dict["truth"].append(jet_energy_recal_truth)
+
+                jet_pt_dict["EM"].append(event_jet_pt[jet])
+                jet_pt_dict["truth"].append(event_jet_pt_truth[jet])
+                jet_energy_dict["EM"].append(event_jet_e_EM[jet])
+                jet_energy_dict["truth"].append(event_jet_e_truth[jet])
+
+            event_counter += 1
 
     if DEBUG:
         print("Shape of jet_pt_dict['EM']: ", np.array(jet_pt_dict["EM"]).shape)
@@ -231,12 +213,13 @@ def main(args, out_file=None):
     jet_abs_eta_min = getattr(args, "abs_eta_min", None)
     jet_abs_eta_max = getattr(args, "abs_eta_max", None)
 
-    proc = NtupleProcessorRDF_jet(args.input, args.tree, args.nEvents)
-    proc.build_dataframe()
+    proc = NtupleProcessor_jet(args.input, args.tree, args.nEvents)
+    proc.build_arrays()
 
     frames = _collect_event_data(proc)
     response_data = _build_response_arrays(
         frames,
+        proc.n_events_to_process,
         jet_abs_eta_min=jet_abs_eta_min,
         jet_abs_eta_max=jet_abs_eta_max,
     )
@@ -263,7 +246,7 @@ def main(args, out_file=None):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Process jet tuples with RDF and save response histograms to ROOT.")
+    parser = argparse.ArgumentParser(description="Process jet tuples with uproot/awkward and save response histograms to ROOT.")
     parser.add_argument("--input", required=True, action='append', help="Path to input ROOT file.")
     parser.add_argument("--tree", required=True, help="Tree name.")
     parser.add_argument("--output", default="iqr_histograms.root", help="Output ROOT file path.")

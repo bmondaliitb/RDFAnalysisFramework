@@ -2,7 +2,7 @@
 
 This repository now has a modular backbone under `src/rdf_analysis/`:
 
-- `core/`: shared `RDataFrame` processor utilities
+- `core/`: shared uproot/awkward processor utilities
 - `physics/`: recoil and kinematic helpers
 - `stats/`: fit and histogram helpers
 - `analyses/`: analysis-specific workflows and orchestration

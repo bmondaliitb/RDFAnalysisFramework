@@ -16,7 +16,7 @@ import sys
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from rdf_analysis.analyses.hadrecoil_common import NtupleProcessorRDF_hadrecoil
+from rdf_analysis.analyses.hadrecoil_common import NtupleProcessor_hadrecoil
 from rdf_analysis.physics import hadronic_recoil_from_clusters_python
 from rdf_analysis.stats import make_numpy_hist, make_hist_from_bin_contents
 
@@ -28,17 +28,22 @@ def validate_em_recoil_calculation(proc, max_events=None):
 
     Returns dict with validation results.
     """
-    # Extract required data
-    df_lep_pt = proc.to_pandas(["lep_pt"])
-    df_lep_eta = proc.to_pandas(["lep_eta"])
-    df_lep_phi = proc.to_pandas(["lep_phi"])
-    df_clus_e_em = proc.to_pandas(["clus_e_em"])
-    df_clus_eta = proc.to_pandas(["clus_eta"])
-    df_clus_phi = proc.to_pandas(["clus_phi"])
-
-    # Get the stored u_pt_em values from the processor
-    df_u_pt_em_stored = proc.to_pandas(["u_pt_em"])
-    u_pt_em_stored = df_u_pt_em_stored["u_pt_em"].to_numpy()
+    arrays = proc.to_numpy([
+        "lep_pt",
+        "lep_eta",
+        "lep_phi",
+        "clus_e_em",
+        "clus_eta",
+        "clus_phi",
+        "u_pt_em",
+    ])
+    df_lep_pt = arrays["lep_pt"]
+    df_lep_eta = arrays["lep_eta"]
+    df_lep_phi = arrays["lep_phi"]
+    df_clus_e_em = arrays["clus_e_em"]
+    df_clus_eta = arrays["clus_eta"]
+    df_clus_phi = arrays["clus_phi"]
+    u_pt_em_stored = arrays["u_pt_em"]
 
     total_events = len(u_pt_em_stored)
     if max_events is not None and max_events > 0:
@@ -57,13 +62,13 @@ def validate_em_recoil_calculation(proc, max_events=None):
             print(f"[Info]:: Validated {event}/{total_events} events")
 
         # Get event data
-        lep_pt = np.array(df_lep_pt.iloc[event]["lep_pt"])
-        lep_eta = np.array(df_lep_eta.iloc[event]["lep_eta"])
-        lep_phi = np.array(df_lep_phi.iloc[event]["lep_phi"])
+        lep_pt = np.asarray(df_lep_pt[event], dtype=np.float64)
+        lep_eta = np.asarray(df_lep_eta[event], dtype=np.float64)
+        lep_phi = np.asarray(df_lep_phi[event], dtype=np.float64)
 
-        clus_e = np.array(df_clus_e_em.iloc[event]["clus_e_em"])
-        clus_eta = np.array(df_clus_eta.iloc[event]["clus_eta"])
-        clus_phi = np.array(df_clus_phi.iloc[event]["clus_phi"])
+        clus_e = np.asarray(df_clus_e_em[event], dtype=np.float64)
+        clus_eta = np.asarray(df_clus_eta[event], dtype=np.float64)
+        clus_phi = np.asarray(df_clus_phi[event], dtype=np.float64)
 
         # Compute EM recoil using Python function
         hadrecoil = hadronic_recoil_from_clusters_python(
@@ -216,8 +221,8 @@ def parse_args():
 def main(args):
     """Main validation routine."""
     # Initialize processor
-    proc = NtupleProcessorRDF_hadrecoil(args.input, args.tree, args.nEvents)
-    proc.build_dataframe()
+    proc = NtupleProcessor_hadrecoil(args.input, args.tree, args.nEvents)
+    proc.build_arrays()
 
     # Run validation
     results = validate_em_recoil_calculation(proc, max_events=args.nEvents)
@@ -235,4 +240,3 @@ if __name__ == "__main__":
     args = parse_args()
     results, validation_passed = main(args)
     sys.exit(0 if validation_passed else 1)
-

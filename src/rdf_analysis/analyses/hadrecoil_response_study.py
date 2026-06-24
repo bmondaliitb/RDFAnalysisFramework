@@ -7,7 +7,7 @@ import sys
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from rdf_analysis.analyses.hadrecoil_common import NtupleProcessorRDF_hadrecoil
+from rdf_analysis.analyses.hadrecoil_common import NtupleProcessor_hadrecoil
 from rdf_analysis.stats import make_numpy_hist, make_param_hist, make_hist_from_bin_contents
 
 
@@ -72,21 +72,21 @@ def hadrecoil_response(proc, x_bin_edges, out_file):
                                 x_bin_edges, delta_sigma_uperp_ml_truth).Write()
 
 
-    #df_u_mag_truth = proc.to_pandas(["u_mag_truth"])["u_mag_truth"].to_numpy()
-    #df_u_mag_em = proc.to_pandas(["u_mag_em"])["u_mag_em"].to_numpy()
-    #df_u_mag_ml = proc.to_pandas(["u_mag_ml"])["u_mag_ml"].to_numpy()
+    #df_u_mag_truth = proc.to_numpy(["u_mag_truth"])["u_mag_truth"]
+    #df_u_mag_em = proc.to_numpy(["u_mag_em"])["u_mag_em"]
+    #df_u_mag_ml = proc.to_numpy(["u_mag_ml"])["u_mag_ml"]
     #delta_u_mag_ml_truth = df_u_mag_ml - df_u_mag_truth
     #delta_u_mag_em_truth = df_u_mag_em - df_u_mag_truth
 
-    #df_u_par_truth = proc.to_pandas(["u_par_truth"])["u_par_truth"].to_numpy()
-    #df_u_par_em = proc.to_pandas(["u_par_em"])["u_par_em"].to_numpy()
-    #df_u_par_ml = proc.to_pandas(["u_par_ml"])["u_par_ml"].to_numpy()
+    #df_u_par_truth = proc.to_numpy(["u_par_truth"])["u_par_truth"]
+    #df_u_par_em = proc.to_numpy(["u_par_em"])["u_par_em"]
+    #df_u_par_ml = proc.to_numpy(["u_par_ml"])["u_par_ml"]
     #delta_u_par_ml_truth = df_u_par_ml - df_u_par_truth
     #delta_u_par_em_truth = df_u_par_em - df_u_par_truth
 
-    #df_u_perp_truth = proc.to_pandas(["u_perp_truth"])["u_perp_truth"].to_numpy()
-    #df_u_perp_em = proc.to_pandas(["u_perp_em"])["u_perp_em"].to_numpy()
-    #df_u_perp_ml = proc.to_pandas(["u_perp_ml"])["u_perp_ml"].to_numpy()
+    #df_u_perp_truth = proc.to_numpy(["u_perp_truth"])["u_perp_truth"]
+    #df_u_perp_em = proc.to_numpy(["u_perp_em"])["u_perp_em"]
+    #df_u_perp_ml = proc.to_numpy(["u_perp_ml"])["u_perp_ml"]
     #delta_u_perp_ml_truth = df_u_perp_ml - df_u_perp_truth
     #delta_u_perp_em_truth = df_u_perp_em - df_u_perp_truth
 
@@ -101,8 +101,8 @@ def parse_args():
 
 
 def main(args):
-    proc = NtupleProcessorRDF_hadrecoil(args.input, args.tree, args.nEvents)
-    proc.build_dataframe()
+    proc = NtupleProcessor_hadrecoil(args.input, args.tree, args.nEvents)
+    proc.build_arrays()
     out_file = ROOT.TFile(args.output, "RECREATE")
     # pT(ll) bin edges
     x_bin_edges = [0,5,10,15,20,25,30,40,50,60,70,80,90,100,150,250]
@@ -113,4 +113,3 @@ def main(args):
 
 if __name__ == "__main__":
     main(parse_args())
-

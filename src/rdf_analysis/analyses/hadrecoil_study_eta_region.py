@@ -9,7 +9,7 @@ resolution-vs-qT summaries for each region.
 
 Workflow in `study_3`:
 
-1) Materialize event content from the RDataFrame wrapper
+1) Materialize event content from the shared uproot/awkward processor
    - Lepton kinematics: `lep_pt`, `lep_eta`, `lep_phi`
    - Cluster inputs: `clus_e_truth`, `clus_e_em`, `clus_e_ml`, `clus_eta`, `clus_phi`
    - Truth-particle inputs: `met_truth_particle_pt/eta/phi/e`
@@ -63,7 +63,7 @@ import sys
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from rdf_analysis.analyses.hadrecoil_common import NtupleProcessorRDF_hadrecoil
+from rdf_analysis.analyses.hadrecoil_common import NtupleProcessor_hadrecoil
 from rdf_analysis.physics import compute_sum_et_from_energy, hadrecoil_from_truth_particles, hadronic_recoil_from_clusters_python
 from rdf_analysis.stats import get_bins_log, make_numpy_hist, make_hist_from_bin_contents
 from rdf_analysis.stats.fits import calculate_gaussian_fit_params_from_arrays, calculate_mean_sigma_in_x_bins
@@ -74,20 +74,33 @@ def study_3(proc, outfile):
     prev_dir = ROOT.gDirectory
 
     # Materialize event-level inputs needed to recompute recoil observables in eta slices.
-    df_lep_pt = proc.to_pandas(["lep_pt"])
-    df_lep_eta = proc.to_pandas(["lep_eta"])
-    df_lep_phi = proc.to_pandas(["lep_phi"])
+    arrays = proc.to_numpy([
+        "lep_pt",
+        "lep_eta",
+        "lep_phi",
+        "clus_e_truth",
+        "clus_e_em",
+        "clus_e_ml",
+        "clus_eta",
+        "clus_phi",
+        "met_truth_particle_pt",
+        "met_truth_particle_eta",
+        "met_truth_particle_phi",
+        "met_truth_particle_e",
+    ])
 
-    df_clus_e_truth = proc.to_pandas(["clus_e_truth"])
-    df_clus_e_em = proc.to_pandas(["clus_e_em"])
-    df_clus_e_ml = proc.to_pandas(["clus_e_ml"])
-    df_clus_eta = proc.to_pandas(["clus_eta"])
-    df_clus_phi = proc.to_pandas(["clus_phi"])
-
-    df_truth_particle_pt = proc.to_pandas(["met_truth_particle_pt"])
-    df_truth_particle_eta = proc.to_pandas(["met_truth_particle_eta"])
-    df_truth_particle_phi = proc.to_pandas(["met_truth_particle_phi"])
-    df_truth_particle_e = proc.to_pandas(["met_truth_particle_e"])
+    df_lep_pt = arrays["lep_pt"]
+    df_lep_eta = arrays["lep_eta"]
+    df_lep_phi = arrays["lep_phi"]
+    df_clus_e_truth = arrays["clus_e_truth"]
+    df_clus_e_em = arrays["clus_e_em"]
+    df_clus_e_ml = arrays["clus_e_ml"]
+    df_clus_eta = arrays["clus_eta"]
+    df_clus_phi = arrays["clus_phi"]
+    df_truth_particle_pt = arrays["met_truth_particle_pt"]
+    df_truth_particle_eta = arrays["met_truth_particle_eta"]
+    df_truth_particle_phi = arrays["met_truth_particle_phi"]
+    df_truth_particle_e = arrays["met_truth_particle_e"]
 
     eta_regions = [
         ("abs_eta_lt2p5", 0.0, 2.5),
@@ -122,7 +135,7 @@ def study_3(proc, outfile):
     u_pt_ml_by_region = {region_name: [] for region_name, _, _ in eta_regions}
     u_pt_truth_particle_by_region = {region_name: [] for region_name, _, _ in eta_regions}
 
-    total_events = df_lep_pt.shape[0]
+    total_events = len(df_lep_pt)
     event_counter = 0
 
     # Event loop: split clusters/truth particles by |eta| region and recompute observables region-by-region.
@@ -130,20 +143,20 @@ def study_3(proc, outfile):
         if event_counter % 10000 == 0:
             print("[Info]:: Processing event {}/{}".format(event, total_events))
 
-        event_lep_pt = np.array(df_lep_pt.iloc[event]["lep_pt"])
-        event_lep_eta = np.array(df_lep_eta.iloc[event]["lep_eta"])
-        event_lep_phi = np.array(df_lep_phi.iloc[event]["lep_phi"])
+        event_lep_pt = np.asarray(df_lep_pt[event], dtype=np.float64)
+        event_lep_eta = np.asarray(df_lep_eta[event], dtype=np.float64)
+        event_lep_phi = np.asarray(df_lep_phi[event], dtype=np.float64)
 
-        event_clus_e_truth = np.array(df_clus_e_truth.iloc[event]["clus_e_truth"])
-        event_clus_e_em = np.array(df_clus_e_em.iloc[event]["clus_e_em"])
-        event_clus_e_ml = np.array(df_clus_e_ml.iloc[event]["clus_e_ml"])
-        event_clus_eta = np.array(df_clus_eta.iloc[event]["clus_eta"])
-        event_clus_phi = np.array(df_clus_phi.iloc[event]["clus_phi"])
+        event_clus_e_truth = np.asarray(df_clus_e_truth[event], dtype=np.float64)
+        event_clus_e_em = np.asarray(df_clus_e_em[event], dtype=np.float64)
+        event_clus_e_ml = np.asarray(df_clus_e_ml[event], dtype=np.float64)
+        event_clus_eta = np.asarray(df_clus_eta[event], dtype=np.float64)
+        event_clus_phi = np.asarray(df_clus_phi[event], dtype=np.float64)
 
-        event_truth_particle_pt = np.array(df_truth_particle_pt.iloc[event]["met_truth_particle_pt"])
-        event_truth_particle_eta = np.array(df_truth_particle_eta.iloc[event]["met_truth_particle_eta"])
-        event_truth_particle_phi = np.array(df_truth_particle_phi.iloc[event]["met_truth_particle_phi"])
-        event_truth_particle_e = np.array(df_truth_particle_e.iloc[event]["met_truth_particle_e"])
+        event_truth_particle_pt = np.asarray(df_truth_particle_pt[event], dtype=np.float64)
+        event_truth_particle_eta = np.asarray(df_truth_particle_eta[event], dtype=np.float64)
+        event_truth_particle_phi = np.asarray(df_truth_particle_phi[event], dtype=np.float64)
+        event_truth_particle_e = np.asarray(df_truth_particle_e[event], dtype=np.float64)
 
         z_x = np.sum(event_lep_pt * np.cos(event_lep_phi))
         z_y = np.sum(event_lep_pt * np.sin(event_lep_phi))
@@ -321,8 +334,8 @@ def parse_args():
 
 
 def main(args):
-    proc = NtupleProcessorRDF_hadrecoil(args.input, args.tree, args.nEvents)
-    proc.build_dataframe()
+    proc = NtupleProcessor_hadrecoil(args.input, args.tree, args.nEvents)
+    proc.build_arrays()
     out_file = ROOT.TFile(args.output, "RECREATE")
     study_3(proc, out_file)
     out_file.Close()
@@ -331,4 +344,3 @@ def main(args):
 
 if __name__ == "__main__":
     main(parse_args())
-

@@ -23,6 +23,7 @@ ROOT.gROOT.SetBatch(True)
 
 
 CLUSTER_MOMENT_BRANCHES = [
+    "cluster_eta",
     "cluster_SIGNIFICANCE",
     "cluster_time",
     "cluster_SECOND_TIME",
@@ -35,6 +36,8 @@ CLUSTER_MOMENT_BRANCHES = [
     "cluster_PTD",
     "cluster_ISOLATION",
     "cluster_closestDeltaR",
+    "nprimvtx",
+    "avgmu"
 ]
 
 
@@ -102,6 +105,7 @@ def get_moment_branches(proc, tree_name, include_tower_moments=False):
         sys.exit(1)
 
     moment_branches = [branch for branch in CLUSTER_MOMENT_BRANCHES if branch in branches]
+    print("[Info]:: Found {} moment branches".format(len(moment_branches)))
     if include_tower_moments:
         moment_branches += [branch for branch in CLUSTER_TOWER_MOMENT_BRANCHES if branch in branches]
 

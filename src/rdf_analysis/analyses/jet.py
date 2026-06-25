@@ -66,8 +66,10 @@ def _collect_event_data(proc):
         "jet_e_truth",
         "cluster_e_truth",
         "cluster_e_EM",
+        "cluster_e_ML",
         "cluster_e_ML_correct",
         "cluster_e_LC",
+        "cluster_eta",
     ]
     return proc.iter_arrays(columns)
 
@@ -87,8 +89,10 @@ def _build_response_arrays(frames, total_events, jet_abs_eta_min=None, jet_abs_e
         df_jet_e_truth = chunk["jet_e_truth"]
         df_cluster_e_truth = chunk["cluster_e_truth"]
         df_cluster_e_EM = chunk["cluster_e_EM"]
-        df_cluster_e_ML = chunk["cluster_e_ML_correct"]
+        df_cluster_e_ML = chunk["cluster_e_ML"]
+        df_cluster_e_ML_correct = chunk["cluster_e_ML_correct"]
         df_cluster_e_LC = chunk["cluster_e_LC"]
+        df_cluster_eta = chunk["cluster_eta"]
 
         for event in range(len(df_jet_pt)):
             if event_counter % 10000 == 0:
@@ -100,8 +104,13 @@ def _build_response_arrays(frames, total_events, jet_abs_eta_min=None, jet_abs_e
             event_jet_pt_truth = to_numpy(df_jet_pt_truth[event])
             event_jet_e_truth = to_numpy(df_jet_e_truth[event])
 
-            # verify size of number of jets and size of df_cluster_e_truth matches
-            if (len(event_jet_pt) != len(df_cluster_e_truth[event])):
+            # verify size of number of jets and size of cluster branches matches
+            if not (
+                len(event_jet_pt) == len(df_cluster_e_truth[event])
+                == len(df_cluster_e_EM[event]) == len(df_cluster_e_ML[event])
+                == len(df_cluster_e_ML_correct[event]) == len(df_cluster_e_LC[event])
+                == len(df_cluster_eta[event])
+            ):
                 print("[Error]:: Number of jets does not match number of cluster energy entries for event {}".format(event_counter))
                 sys.exit(1)
             if not (
@@ -125,14 +134,23 @@ def _build_response_arrays(frames, total_events, jet_abs_eta_min=None, jet_abs_e
                 event_cluster_e_truth = to_numpy(df_cluster_e_truth[event][jet])
                 event_cluster_e_EM = to_numpy(df_cluster_e_EM[event][jet])
                 event_cluster_e_ML = to_numpy(df_cluster_e_ML[event][jet])
+                event_cluster_e_ML_correct = to_numpy(df_cluster_e_ML_correct[event][jet])
                 event_cluster_e_LC = to_numpy(df_cluster_e_LC[event][jet])
+                event_cluster_eta = to_numpy(df_cluster_eta[event][jet])
 
                 if not (
                     len(event_cluster_e_truth) == len(event_cluster_e_EM) ==
-                    len(event_cluster_e_ML) == len(event_cluster_e_LC)
+                    len(event_cluster_e_ML) == len(event_cluster_e_ML_correct)
+                    == len(event_cluster_e_LC) == len(event_cluster_eta)
                 ):
                     print("[Error]:: Number of cluster entries does not match across scales for event {}, jet {}".format(event_counter, jet))
                     sys.exit(1)
+
+                event_cluster_e_ML = np.where(
+                    np.abs(event_cluster_eta) < 2.5,
+                    event_cluster_e_ML,
+                    event_cluster_e_ML_correct,
+                )
 
                 jet_energy_recal_EM = get_jet_energy(event_cluster_e_EM)
                 jet_energy_recal_ML = get_jet_energy(event_cluster_e_ML)

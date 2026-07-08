@@ -18,11 +18,13 @@ if __package__ in {None, ""}:
 
 from rdf_analysis.analyses.cluster import _default_cluster_truth_energy_bin_edges
 from rdf_analysis.core import NtupleProcessor, awkward_to_numpy
+from rdf_analysis.stats import calculate_sigma_iqr_in_x_bins, make_iqr_hist
 
 ROOT.gROOT.SetBatch(True)
 
 
 CLUSTER_MOMENT_BRANCHES = [
+    "cluster_e_EM",
     "cluster_eta",
     "cluster_SIGNIFICANCE",
     "cluster_time",
@@ -52,6 +54,33 @@ CLUSTER_TOWER_MOMENT_BRANCHES = [
 ]
 
 
+BRANCH_CLUSTER_FEATURES = [
+    ("clusterE", "e_ems", None),
+    ("clusterEta", "y_ems", "cluster_eta"),
+    ("cluster_SIGNIFICANCE", "m_sig", "cluster_SIGNIFICANCE"),
+    ("cluster_time", "t_ems", "cluster_time"),
+    ("cluster_SECOND_TIME", "m_tim", "cluster_SECOND_TIME"),
+    ("cluster_CENTER_LAMBDA", "m_lam", "cluster_CENTER_LAMBDA"),
+    ("cluster_CENTER_MAG", "m_cog", "cluster_CENTER_MAG"),
+    ("cluster_ENG_FRAC_EM_INCL", "m_fem", "cluster_ENG_FRAC_EM_INCL"),
+    ("cluster_FIRST_ENG_DENS", "m_rho", "cluster_FIRST_ENG_DENS"),
+    ("cluster_LONGITUDINAL", "m_lon", "cluster_LONGITUDINAL"),
+    ("cluster_LATERAL", "m_lat", "cluster_LATERAL"),
+    ("cluster_PTD", "m_ptd", "cluster_PTD"),
+    ("cluster_ISOLATION", "m_iso", "cluster_ISOLATION"),
+    ("nPrimVtx", "p_npv", "nprimvtx"),
+    ("avgMu", "p_mmu", "avgmu"),
+    ("cluster_closestDeltaR", "cluster_closestDeltaR", "cluster_closestDeltaR"),
+    ("cluster_FIRST_TOWER_PHI", "cluster_FIRST_TOWER_PHI", "cluster_FIRST_TOWER_PHI"),
+    ("cluster_FIRST_TOWER_ETA", "cluster_FIRST_TOWER_ETA", "cluster_FIRST_TOWER_ETA"),
+    ("cluster_FIRST_TOWER_R", "cluster_FIRST_TOWER_R", "cluster_FIRST_TOWER_R"),
+    ("cluster_SECOND_TOWER_PHI", "cluster_SECOND_TOWER_PHI", "cluster_SECOND_TOWER_PHI"),
+    ("cluster_SECOND_TOWER_ETA", "cluster_SECOND_TOWER_ETA", "cluster_SECOND_TOWER_ETA"),
+    ("cluster_SECOND_TOWER_R", "cluster_SECOND_TOWER_R", "cluster_SECOND_TOWER_R"),
+    ("cluster_TOWER_PTD", "cluster_TOWER_PTD", "cluster_TOWER_PTD"),
+]
+
+
 def to_numpy(values):
     return awkward_to_numpy(values)
 
@@ -66,10 +95,13 @@ class BranchClusterResults:
     moment_values_offdiag: dict
     moment_values_diag: dict
     all_truth: list
+    all_em: list
     all_ml: list
     selected_truth: list
+    selected_em: list
     selected_ml: list
     diag_truth: list
+    diag_em: list
     diag_ml: list
 
     @classmethod
@@ -84,17 +116,18 @@ class BranchClusterResults:
             [],
             [],
             [],
+            [],
+            [],
+            [],
         )
 
 
 def get_moment_branches(proc, tree_name, include_tower_moments=False):
     branches = proc.branch_names()
-    required = ["cluster_e_truth", "cluster_e_ML_correct"]
+    required = ["cluster_e_truth", "cluster_e_EM", "cluster_e_ML", "cluster_e_ML_correct", "cluster_eta"]
     if tree_name == "InJetEvents":
         required.append("jet_eta")
-    elif tree_name == "OutJetEvents":
-        required.append("cluster_eta")
-    else:
+    elif tree_name != "OutJetEvents":
         print("[Error]:: Unsupported tree {}. Expected InJetEvents or OutJetEvents.".format(tree_name))
         sys.exit(1)
 
@@ -125,6 +158,14 @@ def eta_mask(jet_eta, abs_eta_min=None, abs_eta_max=None):
         mask &= np.abs(jet_eta) < abs_eta_max
 
     return mask
+
+
+def cluster_ml_energy(cluster_eta, cluster_e_ml, cluster_e_ml_correct):
+    return np.where(
+        np.abs(cluster_eta) < 2.5,
+        cluster_e_ml,
+        cluster_e_ml_correct,
+    )
 
 
 def cluster_energy_mask(cluster_truth, cluster_ml):
@@ -351,6 +392,89 @@ def write_energy_plot(all_truth, all_ml, selected_truth, selected_ml, diag_truth
     return png_path
 
 
+def write_resolution_histograms(truth_values, em_values, ml_values, args):
+    truth_values = np.asarray(truth_values, dtype=np.float64)
+    em_values = np.asarray(em_values, dtype=np.float64)
+    ml_values = np.asarray(ml_values, dtype=np.float64)
+    bin_edges = _default_cluster_truth_energy_bin_edges(truth_values, n_bins=args.energy_n_bins)
+
+    for scale, values in (("em", em_values), ("ml", ml_values)):
+        response = values / truth_values
+        median_values, sigma_iqr_values = calculate_sigma_iqr_in_x_bins(truth_values, response, bin_edges)
+        resolution = np.divide(
+            sigma_iqr_values,
+            median_values,
+            out=np.full_like(sigma_iqr_values, np.nan),
+            where=np.isfinite(median_values) & (median_values != 0),
+        )
+        hist = make_iqr_hist(
+            f"h_branch_cluster_resolution_iqr_offdiag_{scale}_vs_truth_cluster_energy",
+            f"Off-diagonal {scale.upper()} cluster resolution vs truth cluster energy",
+            bin_edges,
+            resolution,
+            x_title="E_{cluster}^{truth} [GeV]",
+            y_title="#sigma_{IQR}/median",
+        )
+        hist.Write()
+
+
+def write_response_vs_feature_plots(results, args):
+    from rdf_analysis.analyses.infer_with_preprocessing import (
+        FEATURE_INDEX,
+        plot_response_vs_features,
+        resolve_feature_flags,
+    )
+
+    truth = np.asarray(results.selected_truth, dtype=np.float64)
+    em = np.asarray(results.selected_em, dtype=np.float64)
+    ml = np.asarray(results.selected_ml, dtype=np.float64)
+    keep = np.isfinite(truth) & np.isfinite(em) & np.isfinite(ml) & (truth > 0) & (em > 0) & (ml > 0)
+
+    if np.count_nonzero(keep) == 0:
+        return None
+
+    data_before = np.full((np.count_nonzero(keep), max(FEATURE_INDEX.values()) + 1), np.nan, dtype=np.float64)
+    features = {}
+
+    for feature_name, trained_name, branch in BRANCH_CLUSTER_FEATURES:
+        if trained_name not in FEATURE_INDEX:
+            continue
+        if branch is None:
+            values = em
+        elif branch in results.moment_values_offdiag:
+            values = np.asarray(results.moment_values_offdiag[branch], dtype=np.float64)
+        else:
+            continue
+
+        if len(values) != len(truth):
+            continue
+
+        data_before[:, FEATURE_INDEX[trained_name]] = values[keep]
+        features[feature_name] = {"trained_name": trained_name}
+
+    if not features:
+        return None
+
+    config = {"data": {"features": features}}
+    use_tower_moments, default_setup = resolve_feature_flags(config)
+    output_path = Path(args.output).with_suffix("")
+    output_path = output_path.parent / f"{output_path.name}_response_vs_features"
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    plot_response_vs_features(
+        str(output_path),
+        data_before,
+        data_before,
+        em[keep] / truth[keep],
+        ml[keep] / truth[keep],
+        config,
+        {},
+        use_tower_moments,
+        default_setup,
+    )
+    return output_path
+
+
 class BranchClusterAnalysis:
     def __init__(self, args):
         self.args = args
@@ -369,8 +493,8 @@ class BranchClusterAnalysis:
 
         self.write_outputs()
 
-    def append_cluster_selection(self, cluster_truth, cluster_ml, moment_arrays, event_counter, location):
-        if len(cluster_truth) != len(cluster_ml):
+    def append_cluster_selection(self, cluster_truth, cluster_em, cluster_ml, moment_arrays, event_counter, location):
+        if not (len(cluster_truth) == len(cluster_em) == len(cluster_ml)):
             print("[Error]:: Cluster size mismatch for event {}{}".format(event_counter, location))
             sys.exit(1)
 
@@ -378,6 +502,7 @@ class BranchClusterAnalysis:
         results = self.results
         valid_energy = cluster_energy_mask(cluster_truth, cluster_ml)
         results.all_truth.extend(cluster_truth[valid_energy].tolist())
+        results.all_em.extend(cluster_em[valid_energy].tolist())
         results.all_ml.extend(cluster_ml[valid_energy].tolist())
 
         mask = offdiag_mask(
@@ -399,8 +524,10 @@ class BranchClusterAnalysis:
         )
 
         results.selected_truth.extend(cluster_truth[mask].tolist())
+        results.selected_em.extend(cluster_em[mask].tolist())
         results.selected_ml.extend(cluster_ml[mask].tolist())
         results.diag_truth.extend(cluster_truth[diag_mask].tolist())
+        results.diag_em.extend(cluster_em[diag_mask].tolist())
         results.diag_ml.extend(cluster_ml[diag_mask].tolist())
 
         for branch in self.moment_branches:
@@ -422,13 +549,23 @@ class BranchClusterAnalysis:
     def process_injet_events(self):
         args = self.args
         n_events = self.proc.n_events_to_process
-        columns = ["jet_eta", "cluster_e_truth", "cluster_e_ML_correct"] + self.moment_branches
+        columns = [
+            "jet_eta",
+            "cluster_e_truth",
+            "cluster_e_EM",
+            "cluster_e_ML",
+            "cluster_e_ML_correct",
+            "cluster_eta",
+        ] + self.moment_branches
         event_counter = 0
 
         for chunk in self.proc.iter_arrays(columns):
             df_jet_eta = chunk["jet_eta"]
             df_cluster_e_truth = chunk["cluster_e_truth"]
-            df_cluster_e_ML = chunk["cluster_e_ML_correct"]
+            df_cluster_e_EM = chunk["cluster_e_EM"]
+            df_cluster_e_ML = chunk["cluster_e_ML"]
+            df_cluster_e_ML_correct = chunk["cluster_e_ML_correct"]
+            df_cluster_eta = chunk["cluster_eta"]
 
             for event in range(len(df_jet_eta)):
                 if event_counter % 10000 == 0:
@@ -437,7 +574,11 @@ class BranchClusterAnalysis:
                 jet_eta = to_numpy(df_jet_eta[event])
                 keep_jet = eta_mask(jet_eta, args.abs_eta_min, args.abs_eta_max)
 
-                if not (len(keep_jet) == len(df_cluster_e_truth[event]) == len(df_cluster_e_ML[event])):
+                if not (
+                    len(keep_jet) == len(df_cluster_e_truth[event])
+                    == len(df_cluster_e_EM[event]) == len(df_cluster_e_ML[event])
+                    == len(df_cluster_e_ML_correct[event]) == len(df_cluster_eta[event])
+                ):
                     print(
                         "[Error]:: Number of jets does not match number of cluster energy entries for event {}".format(
                             event_counter,
@@ -458,7 +599,23 @@ class BranchClusterAnalysis:
                 for jet in np.where(keep_jet)[0]:
                     jet = int(jet)
                     cluster_truth = to_numpy(df_cluster_e_truth[event][jet])
+                    cluster_em = to_numpy(df_cluster_e_EM[event][jet])
                     cluster_ml = to_numpy(df_cluster_e_ML[event][jet])
+                    cluster_ml_correct = to_numpy(df_cluster_e_ML_correct[event][jet])
+                    cluster_eta = to_numpy(df_cluster_eta[event][jet])
+                    if not (
+                        len(cluster_truth) == len(cluster_em) == len(cluster_ml)
+                        == len(cluster_ml_correct) == len(cluster_eta)
+                    ):
+                        print(
+                            "[Error]:: Number of cluster entries does not match across scales for event {}, jet {}".format(
+                                event_counter,
+                                jet,
+                            )
+                        )
+                        sys.exit(1)
+
+                    cluster_ml = cluster_ml_energy(cluster_eta, cluster_ml, cluster_ml_correct)
                     moment_arrays = {
                         branch: to_numpy(chunk[branch][event][jet])
                         for branch in self.moment_branches
@@ -466,6 +623,7 @@ class BranchClusterAnalysis:
 
                     self.append_cluster_selection(
                         cluster_truth,
+                        cluster_em,
                         cluster_ml,
                         moment_arrays,
                         event_counter,
@@ -477,13 +635,21 @@ class BranchClusterAnalysis:
     def process_outjet_events(self):
         args = self.args
         n_events = self.proc.n_events_to_process
-        columns = ["cluster_eta", "cluster_e_truth", "cluster_e_ML_correct"] + self.moment_branches
+        columns = [
+            "cluster_eta",
+            "cluster_e_truth",
+            "cluster_e_EM",
+            "cluster_e_ML",
+            "cluster_e_ML_correct",
+        ] + self.moment_branches
         event_counter = 0
 
         for chunk in self.proc.iter_arrays(columns):
             df_cluster_eta = chunk["cluster_eta"]
             df_cluster_e_truth = chunk["cluster_e_truth"]
-            df_cluster_e_ML = chunk["cluster_e_ML_correct"]
+            df_cluster_e_EM = chunk["cluster_e_EM"]
+            df_cluster_e_ML = chunk["cluster_e_ML"]
+            df_cluster_e_ML_correct = chunk["cluster_e_ML_correct"]
 
             for event in range(len(df_cluster_e_truth)):
                 if event_counter % 10000 == 0:
@@ -491,14 +657,21 @@ class BranchClusterAnalysis:
 
                 cluster_eta = to_numpy(df_cluster_eta[event])
                 cluster_truth = to_numpy(df_cluster_e_truth[event])
+                cluster_em = to_numpy(df_cluster_e_EM[event])
                 cluster_ml = to_numpy(df_cluster_e_ML[event])
+                cluster_ml_correct = to_numpy(df_cluster_e_ML_correct[event])
 
-                if not (len(cluster_eta) == len(cluster_truth) == len(cluster_ml)):
+                if not (
+                    len(cluster_eta) == len(cluster_truth) == len(cluster_em)
+                    == len(cluster_ml) == len(cluster_ml_correct)
+                ):
                     print("[Error]:: Cluster size mismatch for event {}".format(event_counter))
                     sys.exit(1)
 
+                cluster_ml = cluster_ml_energy(cluster_eta, cluster_ml, cluster_ml_correct)
                 keep_cluster = eta_mask(cluster_eta, args.abs_eta_min, args.abs_eta_max)
                 cluster_truth = cluster_truth[keep_cluster]
+                cluster_em = cluster_em[keep_cluster]
                 cluster_ml = cluster_ml[keep_cluster]
 
                 moment_arrays = {}
@@ -512,6 +685,7 @@ class BranchClusterAnalysis:
 
                 self.append_cluster_selection(
                     cluster_truth,
+                    cluster_em,
                     cluster_ml,
                     moment_arrays,
                     event_counter,
@@ -530,6 +704,12 @@ class BranchClusterAnalysis:
             results.moment_values_diag,
             args.n_bins,
         )
+        write_resolution_histograms(
+            results.selected_truth,
+            results.selected_em,
+            results.selected_ml,
+            args,
+        )
         png_path = write_energy_plot(
             results.all_truth,
             results.all_ml,
@@ -540,6 +720,7 @@ class BranchClusterAnalysis:
             args,
         )
         output_file.Close()
+        response_plot_path = write_response_vs_feature_plots(results, args)
 
         print(
             "[Info]:: Wrote moment histograms for {} all clusters, {} off-diagonal clusters, and {} very diagonal clusters to {}".format(
@@ -550,6 +731,8 @@ class BranchClusterAnalysis:
             )
         )
         print("[Info]:: Wrote E_truth vs E_ML selection plot to {}".format(png_path))
+        if response_plot_path is not None:
+            print("[Info]:: Wrote response vs feature plots to {}".format(response_plot_path))
 
 
 def main(args):

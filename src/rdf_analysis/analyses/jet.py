@@ -17,6 +17,8 @@ from rdf_analysis.stats import (
 DEBUG = False
 ROOT.gROOT.SetBatch(True)
 
+USE_TOWER_CLUSTER_E_ML_CORRECT = False
+
 
 class NtupleProcessor_jet(NtupleProcessor):
     pass
@@ -57,7 +59,13 @@ def _default_x_bin_edges(): # for forward region (high pt jets)
     ]
 
 
-def _collect_event_data(proc):
+def _cluster_e_ml_correct_branch(use_tower_cluster_e_ml_correct=USE_TOWER_CLUSTER_E_ML_CORRECT):
+    if use_tower_cluster_e_ml_correct:
+        return "cluster_e_ML_correct_tower"
+    return "cluster_e_ML_correct"
+
+
+def _collect_event_data(proc, use_tower_cluster_e_ml_correct=USE_TOWER_CLUSTER_E_ML_CORRECT):
     columns = [
         "jet_pt",
         "jet_eta",
@@ -67,15 +75,22 @@ def _collect_event_data(proc):
         "cluster_e_truth",
         "cluster_e_EM",
         "cluster_e_ML",
-        "cluster_e_ML_correct",
+        _cluster_e_ml_correct_branch(use_tower_cluster_e_ml_correct),
         "cluster_e_LC",
         "cluster_eta",
     ]
     return proc.iter_arrays(columns)
 
 
-def _build_response_arrays(frames, total_events, jet_abs_eta_min=None, jet_abs_eta_max=None):
+def _build_response_arrays(
+    frames,
+    total_events,
+    jet_abs_eta_min=None,
+    jet_abs_eta_max=None,
+    use_tower_cluster_e_ml_correct=USE_TOWER_CLUSTER_E_ML_CORRECT,
+):
     event_counter = 0
+    cluster_e_ml_correct_branch = _cluster_e_ml_correct_branch(use_tower_cluster_e_ml_correct)
 
     jet_energy_recal_dict = {"EM": [], "ML": [], "LC": [], "truth": []}
     jet_pt_dict = {"EM": [], "truth": []}
@@ -90,7 +105,7 @@ def _build_response_arrays(frames, total_events, jet_abs_eta_min=None, jet_abs_e
         df_cluster_e_truth = chunk["cluster_e_truth"]
         df_cluster_e_EM = chunk["cluster_e_EM"]
         df_cluster_e_ML = chunk["cluster_e_ML"]
-        df_cluster_e_ML_correct = chunk["cluster_e_ML_correct"]
+        df_cluster_e_ML_correct = chunk[cluster_e_ml_correct_branch]
         df_cluster_e_LC = chunk["cluster_e_LC"]
         df_cluster_eta = chunk["cluster_eta"]
 
@@ -230,16 +245,25 @@ def _write_histograms(metrics, x_bin_edges):
 def main(args, out_file=None):
     jet_abs_eta_min = getattr(args, "abs_eta_min", None)
     jet_abs_eta_max = getattr(args, "abs_eta_max", None)
+    use_tower_cluster_e_ml_correct = getattr(
+        args,
+        "use_tower_cluster_e_ml_correct",
+        USE_TOWER_CLUSTER_E_ML_CORRECT,
+    )
 
     proc = NtupleProcessor_jet(args.input, args.tree, args.nEvents)
     proc.build_arrays()
 
-    frames = _collect_event_data(proc)
+    frames = _collect_event_data(
+        proc,
+        use_tower_cluster_e_ml_correct=use_tower_cluster_e_ml_correct,
+    )
     response_data = _build_response_arrays(
         frames,
         proc.n_events_to_process,
         jet_abs_eta_min=jet_abs_eta_min,
         jet_abs_eta_max=jet_abs_eta_max,
+        use_tower_cluster_e_ml_correct=use_tower_cluster_e_ml_correct,
     )
     x_bin_edges = _default_x_bin_edges()
 
@@ -284,6 +308,14 @@ def parse_args():
         type=float,
         default=None,
         help="Maximum jet |eta| to keep, using an exclusive upper bound. Omit to leave the upper edge uncut.",
+    )
+    parser.add_argument(
+        "--useTowerClusterEMLCorrect",
+        "--use-tower-cluster-e-ml-correct",
+        dest="use_tower_cluster_e_ml_correct",
+        action="store_true",
+        default=USE_TOWER_CLUSTER_E_ML_CORRECT,
+        help="Use cluster_e_ML_correct_tower instead of cluster_e_ML_correct.",
     )
     return parser.parse_args()
 

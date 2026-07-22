@@ -133,17 +133,3 @@ class NtupleProcessor:
 
     def get_column(self, column):
         return self.materialize([column])[column]
-
-    def calculate_gaussian_fit_params(self, x_column, y_column, x_bin_edges, out_file=None, y_name=None):
-        arrays = self.materialize([x_column, y_column])
-        return calculate_gaussian_fit_params_from_arrays(
-            arrays[x_column],
-            arrays[y_column],
-            x_bin_edges,
-            out_file=out_file,
-            y_name=y_name or y_column,
-        )
-
-    def calculate_mean_sigma_in_x_bins(self, x_column, y_column, x_bin_edges):
-        arrays = self.materialize([x_column, y_column])
-        return calculate_mean_sigma_in_x_bins(arrays[x_column], arrays[y_column], x_bin_edges)

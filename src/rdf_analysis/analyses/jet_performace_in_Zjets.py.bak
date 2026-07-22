@@ -1,0 +1,801 @@
+#!/usr/bin/env python3
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+import sys
+from typing import Optional, Dict, List
+
+import numpy as np
+import ROOT
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from rdf_analysis.core import NtupleProcessor, awkward_to_numpy
+
+Z_MASS = 91.1876
+Z_WINDOW = 20.0
+JET_PT_MIN = 10.0
+JET_Z_DPHI_MIN = 2.8
+SECOND_JET_ABS_PT_MAX = 12.0
+SECOND_JET_REF_PT_FRACTION_MAX = 0.3
+TRUTH_MATCH_DR = 0.4
+GEV = 0.001
+JET_ENERGY_HIST_MAX = 4000.0
+
+JET_CLUSTER_ENERGY_SCALES = (
+    ("cluster", "cluster E", "jet_clusterE", 1.0),
+    ("truth", "cluster truth E", "jet_cluster_truthE", GEV),
+    ("raw", "cluster raw E", "jet_cluster_rawE", 1.0),
+    ("cal", "cluster calibrated E", "jet_cluster_calE", 1.0),
+    ("ml", "cluster ML E", "jet_cluster_MLE", 1.0),
+)
+
+LEADING_CLUSTER_PT_SCALES = (
+    ("raw", "cluster raw E"),
+    ("cal", "cluster calibrated E"),
+    ("truth", "cluster truth E"),
+    ("ml", "cluster ML E"),
+)
+
+
+# ============================================================================
+# Data Classes for Readable Jet Handling
+# ============================================================================
+
+@dataclass
+class Jet:
+    """Single reconstructed jet with kinematic properties."""
+    pt: float
+    eta: float
+    phi: float
+
+
+@dataclass
+class TruthJet:
+    """Single truth-level jet with kinematic and energy properties."""
+    pt: float
+    eta: float
+    phi: float
+    energy: float
+
+
+@dataclass
+class Lepton:
+    """Lepton (muon) with kinematic properties."""
+    pt: np.ndarray
+    eta: np.ndarray
+    phi: np.ndarray
+
+    @property
+    def count(self) -> int:
+        return len(self.pt)
+
+
+@dataclass
+class JetCollection:
+    """All reconstructed jets in an event."""
+    pt: np.ndarray
+    eta: np.ndarray
+    phi: np.ndarray
+    selected_indices: np.ndarray = None
+    
+    def __post_init__(self):
+        if self.selected_indices is None:
+            self.selected_indices = selected_jet_indices(self.pt)
+    
+    def get_jet(self, index: int) -> Jet:
+        """Extract jet at given index."""
+        return Jet(
+            pt=float(self.pt[index]),
+            eta=float(self.eta[index]),
+            phi=float(self.phi[index]),
+        )
+    
+    def get_leading(self) -> Optional[Jet]:
+        """Get leading selected jet."""
+        if len(self.selected_indices) == 0:
+            return None
+        return self.get_jet(self.selected_indices[0])
+    
+    def get_subleading(self) -> Optional[Jet]:
+        """Get subleading selected jet."""
+        if len(self.selected_indices) < 2:
+            return None
+        return self.get_jet(self.selected_indices[1])
+
+
+@dataclass
+class TruthJetCollection:
+    """All truth-level jets in an event."""
+    pt: np.ndarray
+    eta: np.ndarray
+    phi: np.ndarray
+    energy: np.ndarray
+    
+    def get_jet(self, index: int) -> TruthJet:
+        """Extract truth jet at given index."""
+        return TruthJet(
+            pt=float(self.pt[index]),
+            eta=float(self.eta[index]),
+            phi=float(self.phi[index]),
+            energy=float(self.energy[index]),
+        )
+    
+    def find_match(self, reco_jet: Jet) -> Optional[TruthJet]:
+        """Find best truth jet match for reco jet."""
+        index = matched_truth_jet_index(reco_jet.eta, reco_jet.phi, self.eta, self.phi)
+        if index is None:
+            return None
+        return self.get_jet(index)
+
+
+@dataclass
+class ClusterEnergyData:
+    """Cluster energy/pT data for a jet, organized by scale."""
+    cluster_energy: Dict[str, np.ndarray]
+    cluster_eta: np.ndarray
+    cluster_phi: np.ndarray
+    cluster_scale_units: Dict[str, float]
+
+
+ROOT.gROOT.SetBatch(True)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Plot truth-matched jet pT vs reco jet pT in Z+jets events.")
+    parser.add_argument("--input", required=True, action="append")
+    parser.add_argument("--tree", required=True)
+    parser.add_argument("--nEvents", type=int, default=-1)
+    parser.add_argument("--output", default="jet_performace_in_Zjets.root")
+    return parser.parse_args()
+
+
+def to_numpy(values):
+    return awkward_to_numpy(values)
+
+
+def delta_phi(phi1, phi2):
+    return np.arctan2(np.sin(phi1 - phi2), np.cos(phi1 - phi2))
+
+
+def dilepton_mass(lep_pt, lep_eta, lep_phi):
+    # Massless two-lepton invariant mass, using the first two selected muons.
+    deta = lep_eta[0] - lep_eta[1]
+    dphi = delta_phi(lep_phi[0], lep_phi[1])
+    mass2 = 2.0 * lep_pt[0] * lep_pt[1] * (np.cosh(deta) - np.cos(dphi))
+    return np.sqrt(max(mass2, 0.0))
+
+
+def z_transverse_vector(lep_pt, lep_phi):
+    # Build the Z transverse momentum vector from the two leptons.
+    lep_pt = np.asarray(lep_pt[:2], dtype=float)
+    lep_phi = np.asarray(lep_phi[:2], dtype=float)
+
+    z_x = np.sum(lep_pt * np.cos(lep_phi))
+    z_y = np.sum(lep_pt * np.sin(lep_phi))
+    z_pt = np.hypot(z_x, z_y)
+    return z_x, z_y, z_pt
+
+
+def z_phi(lep_pt, lep_phi):
+    z_x, z_y, z_pt = z_transverse_vector(lep_pt, lep_phi)
+    if z_pt == 0.0:
+        return np.nan
+    return np.arctan2(z_y, z_x)
+
+
+def delta_phi_to_z(jet_phi, lep_pt, lep_phi):
+    event_z_phi = z_phi(lep_pt, lep_phi)
+    if not np.isfinite(event_z_phi):
+        return np.nan
+    return abs(delta_phi(jet_phi, event_z_phi))
+
+
+def project_jet_on_z_axis(jet_pt, jet_phi, lep_pt, lep_phi):
+    # Absolute projection of the jet pT vector onto the unit pT(Z) direction.
+    z_x, z_y, z_pt = z_transverse_vector(lep_pt, lep_phi)
+    if z_pt == 0.0:
+        return np.nan
+
+    jet_x = jet_pt * np.cos(jet_phi)
+    jet_y = jet_pt * np.sin(jet_phi)
+    return abs((jet_x * z_x + jet_y * z_y) / z_pt)
+
+
+def selected_jet_indices(jet_pt):
+    # Keep reco jets above threshold and sort them from leading to subleading.
+    selected = np.where(np.isfinite(jet_pt) & (jet_pt > JET_PT_MIN))[0]
+    return selected[np.argsort(jet_pt[selected])[::-1]]
+
+
+def passes_second_jet_veto(selected_indices, jet_pt, leading_pt_ref):
+    """Check if second jet passes veto."""
+    if len(selected_indices) < 2:
+        return True
+
+    second_jet_idx = int(selected_indices[1])
+    max_second_jet_pt = max(SECOND_JET_ABS_PT_MAX, SECOND_JET_REF_PT_FRACTION_MAX * leading_pt_ref)
+    return float(jet_pt[second_jet_idx]) < max_second_jet_pt
+
+
+def matched_truth_jet_index(jet_eta, jet_phi, tjet_eta, tjet_phi):
+    # Match the reco jet to the closest truth jet in deltaR.
+    if len(tjet_eta) == 0:
+        return None
+
+    deta = tjet_eta - jet_eta
+    dphi = delta_phi(tjet_phi, jet_phi)
+    dr = np.hypot(deta, dphi)
+    match = int(np.argmin(dr))
+
+    if dr[match] > TRUTH_MATCH_DR:
+        return None
+    return match
+
+
+def matched_truth_jet(jet_eta, jet_phi, tjet_pt, tjet_eta, tjet_phi):
+    match = matched_truth_jet_index(jet_eta, jet_phi, tjet_eta, tjet_phi)
+    if match is None:
+        return np.nan, np.nan
+    return float(tjet_pt[match]), float(tjet_phi[match])
+
+
+def make_jet_hist(name, title, y_title):
+    return ROOT.TH2D(
+        name,
+        f"{title};Truth jet p_{{T}} [GeV];{y_title} [GeV]",
+        100,
+        0.0,
+        200.0,
+        100,
+        0.0,
+        200.0,
+    )
+
+
+def make_cluster_energy_hist(jet_label, scale_key, scale_title):
+    return ROOT.TH2D(
+        f"h2_{jet_label}_{scale_key}_cluster_sum_energy_vs_truth_jet_energy",
+        (
+            f"{jet_label.title()} reco jet summed {scale_title} vs truth matched jet energy;"
+            "Truth jet energy [GeV];"
+            f"Summed {scale_title} [GeV]"
+        ),
+        100,
+        0.0,
+        JET_ENERGY_HIST_MAX,
+        100,
+        0.0,
+        JET_ENERGY_HIST_MAX,
+    )
+
+
+def make_leading_cluster_pt_hist(scale_key, scale_title):
+    return ROOT.TH2D(
+        f"h2_leading_{scale_key}_cluster_sum_pt_vs_truth_jet_pt",
+        (
+            f"Leading truth-matched reco jet p_{{T}} from summed {scale_title} clusters vs truth jet p_{{T}};"
+            "Truth jet p_{T} [GeV];"
+            f"Cluster-summed reco jet p_{{T}} from {scale_title} [GeV]"
+        ),
+        100,
+        0.0,
+        200.0,
+        100,
+        0.0,
+        200.0,
+    )
+
+
+def make_jet_response_profile(name, title):
+    return ROOT.TProfile(
+        name,
+        f"{title};Reco jet p_{{T}} [GeV];#LTp_{{T}}^{{jet}}/p_{{T}}^{{ref}}#GT",
+        40,
+        0.0,
+        200.0,
+    )
+
+
+def make_z_pt_vs_leading_jet_pt_hist():
+    return ROOT.TH2D(
+        "h2_z_pt_vs_leading_reco_jet_pt",
+        "Z p_{T} vs leading reco jet p_{T};Z p_{T} [GeV];Leading reco jet p_{T} [GeV]",
+        100,
+        0.0,
+        200.0,
+        100,
+        0.0,
+        200.0,
+    )
+
+
+def make_z_pt_vs_truth_matched_leading_jet_pt_hist():
+    return ROOT.TH2D(
+        "h2_z_pt_vs_truth_matched_leading_jet_pt",
+        "Z p_{T} vs truth matched leading jet p_{T};Z p_{T} [GeV];Truth matched leading jet p_{T} [GeV]",
+        100,
+        0.0,
+        200.0,
+        100,
+        0.0,
+        200.0,
+    )
+
+
+def make_z_pt_vs_truth_matched_leading_reco_jet_pt_hist():
+    return ROOT.TH2D(
+        "h2_z_pt_vs_truth_matched_leading_reco_jet_pt",
+        "Z p_{T} vs truth matched leading reco jet p_{T};Z p_{T} [GeV];Truth matched leading reco jet p_{T} [GeV]",
+        100,
+        0.0,
+        200.0,
+        100,
+        0.0,
+        200.0,
+    )
+
+
+def make_z_pt_vs_truth_matched_truth_jet_pt_hist():
+    return ROOT.TH2D(
+        "h2_z_pt_vs_truth_matched_truth_jet_pt",
+        "Z p_{T} vs truth matched truth jet p_{T};Z p_{T} [GeV];Truth matched truth jet p_{T} [GeV]",
+        100,
+        0.0,
+        200.0,
+        100,
+        0.0,
+        200.0,
+    )
+
+
+def define_histograms():
+    histograms = {
+        "mll": ROOT.TH1D("h_mll", "Dilepton mass;m_{ll} [GeV];Events", 80, 50.0, 130.0),
+        "z_pt_vs_leading_jet_pt": make_z_pt_vs_leading_jet_pt_hist(),
+        "z_pt_vs_truth_matched_leading_jet_pt": make_z_pt_vs_truth_matched_leading_jet_pt_hist(),
+        "z_pt_vs_truth_matched_leading_reco_jet_pt": make_z_pt_vs_truth_matched_leading_reco_jet_pt_hist(),
+        "z_pt_vs_truth_matched_truth_jet_pt": make_z_pt_vs_truth_matched_truth_jet_pt_hist(),
+        "leading_raw": make_jet_hist(
+            "h2_leading_reco_jet_pt_vs_truth_jet_pt",
+            "Leading reco jet p_{T} vs truth matched jet p_{T}",
+            "Leading reco jet p_{T}",
+        ),
+        "subleading_raw": make_jet_hist(
+            "h2_subleading_reco_jet_pt_vs_truth_jet_pt",
+            "Subleading reco jet p_{T} vs truth matched jet p_{T}",
+            "Subleading reco jet p_{T}",
+        ),
+        "leading_ref": make_jet_hist(
+            "h2_leading_reco_jet_pt_ref_vs_truth_jet_pt_ref",
+            "Leading reco jet p_{T}^{ref} vs truth matched jet p_{T}^{ref}",
+            "Leading reco jet p_{T}^{ref}",
+        ),
+        "subleading_ref": make_jet_hist(
+            "h2_subleading_reco_jet_pt_ref_vs_truth_jet_pt_ref",
+            "Subleading reco jet p_{T}^{ref} vs truth matched jet p_{T}^{ref}",
+            "Subleading reco jet p_{T}^{ref}",
+        ),
+        "jet_pt_over_ref": make_jet_response_profile(
+            "hprof_reco_jet_pt_over_ref_vs_reco_jet_pt",
+            "Average p_{T}^{jet}/p_{T}^{ref} vs reco jet p_{T}",
+        ),
+        "leading_pt_over_ref": make_jet_response_profile(
+            "hprof_leading_reco_jet_pt_over_ref_vs_reco_jet_pt",
+            "Average leading p_{T}^{jet}/p_{T}^{ref} vs reco jet p_{T}",
+        ),
+        "subleading_pt_over_ref": make_jet_response_profile(
+            "hprof_subleading_reco_jet_pt_over_ref_vs_reco_jet_pt",
+            "Average subleading p_{T}^{jet}/p_{T}^{ref} vs reco jet p_{T}",
+        ),
+    }
+
+    for jet_label in ("leading", "subleading"):
+        for scale_key, scale_title, _, _ in JET_CLUSTER_ENERGY_SCALES:
+            histograms[f"{jet_label}_{scale_key}_cluster_energy"] = make_cluster_energy_hist(
+                jet_label,
+                scale_key,
+                scale_title,
+            )
+
+    for scale_key, scale_title in LEADING_CLUSTER_PT_SCALES:
+        histograms[f"leading_{scale_key}_cluster_pt"] = make_leading_cluster_pt_hist(
+            scale_key,
+            scale_title,
+        )
+
+    return histograms
+
+
+def fill_matched_jet(
+    raw_hist,
+    ref_hist,
+    response_profiles,
+    reco_jet: Jet,
+    truth_jet: Optional[TruthJet],
+    leptons: Lepton,
+):
+    """Fill histograms for a matched reco-truth jet pair."""
+    if truth_jet is None:
+        return False
+
+    reco_pt_ref = project_jet_on_z_axis(reco_jet.pt, reco_jet.phi, leptons.pt, leptons.phi)
+    truth_pt_ref = project_jet_on_z_axis(truth_jet.pt, truth_jet.phi, leptons.pt, leptons.phi)
+    if not np.isfinite(reco_pt_ref) or not np.isfinite(truth_pt_ref):
+        return False
+
+    raw_hist.Fill(truth_jet.pt, reco_jet.pt)
+    ref_hist.Fill(truth_pt_ref, reco_pt_ref)
+    if reco_pt_ref > 0.0:
+        response = reco_jet.pt / reco_pt_ref
+        for profile in response_profiles:
+            profile.Fill(reco_jet.pt, response)
+    return True
+
+
+def sum_jet_cluster_energy(jet_cluster_energy, jet, unit_scale):
+    if jet >= len(jet_cluster_energy):
+        return np.nan
+
+    cluster_energy = to_numpy(jet_cluster_energy[jet]) * unit_scale
+    if len(cluster_energy) == 0:
+        return 0.0
+    return float(np.sum(cluster_energy[np.isfinite(cluster_energy)]))
+
+
+def fill_cluster_energy_histograms(
+    histograms: Dict,
+    jet_label: str,
+    truth_energy: float,
+    jet_idx: int,
+    cluster_data: ClusterEnergyData,
+):
+    """Fill cluster energy histograms for a jet."""
+    if not np.isfinite(truth_energy):
+        return
+
+    for scale_key, _, _, unit_scale in JET_CLUSTER_ENERGY_SCALES:
+        summed_energy = sum_jet_cluster_energy(
+            cluster_data.cluster_energy[scale_key],
+            jet_idx,
+            unit_scale,
+        )
+        if np.isfinite(summed_energy):
+            histograms[f"{jet_label}_{scale_key}_cluster_energy"].Fill(truth_energy, summed_energy)
+
+
+def sum_jet_cluster_pt(jet_cluster_energy, jet_cluster_eta, jet_cluster_phi, jet, unit_scale):
+    if jet >= len(jet_cluster_energy) or jet >= len(jet_cluster_eta) or jet >= len(jet_cluster_phi):
+        return np.nan
+
+    cluster_energy = to_numpy(jet_cluster_energy[jet]) * unit_scale
+    cluster_eta = to_numpy(jet_cluster_eta[jet])
+    cluster_phi = to_numpy(jet_cluster_phi[jet])
+    if not (len(cluster_energy) == len(cluster_eta) == len(cluster_phi)):
+        return np.nan
+    if len(cluster_energy) == 0:
+        return 0.0
+
+    finite = np.isfinite(cluster_energy) & np.isfinite(cluster_eta) & np.isfinite(cluster_phi)
+    cluster_pt = cluster_energy[finite] / np.cosh(cluster_eta[finite])
+    jet_px = np.sum(cluster_pt * np.cos(cluster_phi[finite]))
+    jet_py = np.sum(cluster_pt * np.sin(cluster_phi[finite]))
+    return float(np.hypot(jet_px, jet_py))
+
+
+def fill_leading_cluster_pt_histograms(
+    histograms: Dict,
+    truth_pt: float,
+    jet_idx: int,
+    cluster_data: ClusterEnergyData,
+):
+    """Fill cluster pT histograms for leading jet."""
+    if not np.isfinite(truth_pt):
+        return
+
+    for scale_key, _ in LEADING_CLUSTER_PT_SCALES:
+        summed_pt = sum_jet_cluster_pt(
+            cluster_data.cluster_energy[scale_key],
+            cluster_data.cluster_eta,
+            cluster_data.cluster_phi,
+            jet_idx,
+            cluster_data.cluster_scale_units[scale_key],
+        )
+        if np.isfinite(summed_pt):
+            histograms[f"leading_{scale_key}_cluster_pt"].Fill(truth_pt, summed_pt)
+
+
+def event_iterator(arrays):
+    return zip(
+        arrays["mu_pt"],
+        arrays["mu_eta"],
+        arrays["mu_phi"],
+        arrays["jet_pt"],
+        arrays["jet_eta"],
+        arrays["jet_phi"],
+        arrays["tjet_pt"],
+        arrays["tjet_eta"],
+        arrays["tjet_phi"],
+        arrays["tjet_e"],
+        arrays["jet_cluster_eta"],
+        arrays["jet_cluster_phi"],
+        arrays["jet_clusterE"],
+        arrays["jet_cluster_truthE"],
+        arrays["jet_cluster_rawE"],
+        arrays["jet_cluster_calE"],
+        arrays["jet_cluster_MLE"],
+    )
+
+
+def make_counters():
+    return {
+        "events": 0,
+        "z": 0,
+        "leading_dphi": 0,
+        "second_jet_veto": 0,
+        "leading": 0,
+        "selected_leading": 0,
+        "leading_matched": 0,
+        "subleading": 0,
+        "subleading_matched": 0,
+    }
+
+
+def run_analysis(args, histograms):
+    """Main analysis loop with improved readability."""
+    proc = NtupleProcessor(args.input, args.tree, args.nEvents)
+    counters = make_counters()
+    
+    INPUT_COLUMNS = [
+        "mu_pt", "mu_eta", "mu_phi",
+        "jet_pt", "jet_eta", "jet_phi",
+        "tjet_pt", "tjet_eta", "tjet_phi", "tjet_e",
+        "jet_cluster_eta", "jet_cluster_phi",
+        "jet_clusterE", "jet_cluster_truthE", "jet_cluster_rawE", "jet_cluster_calE", "jet_cluster_MLE",
+    ]
+
+    for arrays in proc.iter_arrays(INPUT_COLUMNS):
+        for (
+            mu_pt, mu_eta, mu_phi,
+            jet_pt, jet_eta, jet_phi,
+            tjet_pt, tjet_eta, tjet_phi, tjet_e,
+            jet_cluster_eta, jet_cluster_phi,
+            jet_clusterE, jet_cluster_truthE, jet_cluster_rawE, jet_cluster_calE, jet_cluster_MLE,
+        ) in event_iterator(arrays):
+            if counters["events"] % 10000 == 0:
+                print(f"Processing event {counters['events']}...")
+            counters["events"] += 1
+
+            # Convert from MeV to GeV
+            mu_pt = to_numpy(mu_pt) * GEV
+            mu_eta = to_numpy(mu_eta)
+            mu_phi = to_numpy(mu_phi)
+            leptons = Lepton(pt=mu_pt, eta=mu_eta, phi=mu_phi)
+            
+            if leptons.count < 2:
+                continue
+
+            # Z -> mumu selection
+            mll = dilepton_mass(leptons.pt[:2], leptons.eta[:2], leptons.phi[:2])
+            histograms["mll"].Fill(mll)
+            if abs(mll - Z_MASS) > Z_WINDOW:
+                continue
+            counters["z"] += 1
+
+            # Prepare reco and truth jets
+            jet_pt = to_numpy(jet_pt) * GEV
+            jet_eta = to_numpy(jet_eta)
+            jet_phi = to_numpy(jet_phi)
+            reco_jets = JetCollection(pt=jet_pt, eta=jet_eta, phi=jet_phi)
+            
+            if len(reco_jets.selected_indices) == 0:
+                continue
+
+            tjet_pt = to_numpy(tjet_pt) * GEV
+            tjet_eta = to_numpy(tjet_eta)
+            tjet_phi = to_numpy(tjet_phi)
+            tjet_e = to_numpy(tjet_e) * GEV
+            truth_jets = TruthJetCollection(pt=tjet_pt, eta=tjet_eta, phi=tjet_phi, energy=tjet_e)
+
+            # Cluster energy data for all scales
+            cluster_scale_units = {scale_key: unit_scale for scale_key, _, _, unit_scale in JET_CLUSTER_ENERGY_SCALES}
+            clusters = ClusterEnergyData(
+                cluster_energy={
+                    "cluster": jet_clusterE,
+                    "truth": jet_cluster_truthE,
+                    "raw": jet_cluster_rawE,
+                    "cal": jet_cluster_calE,
+                    "ml": jet_cluster_MLE,
+                },
+                cluster_eta=jet_cluster_eta,
+                cluster_phi=jet_cluster_phi,
+                cluster_scale_units=cluster_scale_units,
+            )
+
+            # Process leading reco jet
+            leading_reco = reco_jets.get_leading()
+            if leading_reco is None:
+                continue
+            
+            counters["leading"] += 1
+            
+            # Check leading jet is isolated from Z
+            leading_delta_phi_z = delta_phi_to_z(leading_reco.phi, leptons.pt, leptons.phi)
+            if not np.isfinite(leading_delta_phi_z) or leading_delta_phi_z <= JET_Z_DPHI_MIN:
+                continue
+            counters["leading_dphi"] += 1
+
+            # Check second jet veto
+            leading_pt_ref = project_jet_on_z_axis(leading_reco.pt, leading_reco.phi, leptons.pt, leptons.phi)
+            if not np.isfinite(leading_pt_ref):
+                continue
+            if not passes_second_jet_veto(reco_jets.selected_indices, reco_jets.pt, leading_pt_ref):
+                continue
+            counters["second_jet_veto"] += 1
+
+            # Now work with selected leading jet
+            counters["selected_leading"] += 1
+            _, _, z_pt = z_transverse_vector(leptons.pt, leptons.phi)
+            histograms["z_pt_vs_leading_jet_pt"].Fill(z_pt, leading_reco.pt)
+
+            # Find truth match for leading jet
+            leading_truth = truth_jets.find_match(leading_reco)
+            if leading_truth is not None:
+                histograms["z_pt_vs_truth_matched_leading_reco_jet_pt"].Fill(z_pt, leading_reco.pt)
+                histograms["z_pt_vs_truth_matched_leading_jet_pt"].Fill(z_pt, leading_truth.pt)
+                histograms["z_pt_vs_truth_matched_truth_jet_pt"].Fill(z_pt, leading_truth.pt)
+                
+                # Get the jet index for cluster operations
+                leading_jet_idx = int(reco_jets.selected_indices[0])
+                fill_leading_cluster_pt_histograms(
+                    histograms,
+                    leading_truth.pt,
+                    leading_jet_idx,
+                    clusters,
+                )
+                fill_cluster_energy_histograms(
+                    histograms,
+                    "leading",
+                    leading_truth.energy,
+                    leading_jet_idx,
+                    clusters,
+                )
+
+            # Fill matched jet histograms for leading
+            if fill_matched_jet(
+                histograms["leading_raw"],
+                histograms["leading_ref"],
+                [histograms["jet_pt_over_ref"], histograms["leading_pt_over_ref"]],
+                leading_reco,
+                leading_truth,
+                leptons,
+            ):
+                counters["leading_matched"] += 1
+
+            # Process subleading jet if present
+            subleading_reco = reco_jets.get_subleading()
+            if subleading_reco is not None:
+                counters["subleading"] += 1
+                
+                subleading_truth = truth_jets.find_match(subleading_reco)
+                if subleading_truth is not None:
+                    subleading_jet_idx = int(reco_jets.selected_indices[1])
+                    fill_cluster_energy_histograms(
+                        histograms,
+                        "subleading",
+                        subleading_truth.energy,
+                        subleading_jet_idx,
+                        clusters,
+                    )
+
+                if fill_matched_jet(
+                    histograms["subleading_raw"],
+                    histograms["subleading_ref"],
+                    [histograms["jet_pt_over_ref"], histograms["subleading_pt_over_ref"]],
+                    subleading_reco,
+                    subleading_truth,
+                    leptons,
+                ):
+                    counters["subleading_matched"] += 1
+
+    return counters
+
+
+def draw_histogram(output, hist, suffix):
+    # Store one canvas per 2D histogram for quick inspection.
+    canvas = ROOT.TCanvas(f"c_{hist.GetName()}", "", 900, 800)
+    canvas.SetRightMargin(0.15)
+    hist.Draw("COLZ")
+    canvas.Write()
+    canvas.SaveAs(str(Path(output).with_suffix(f".{suffix}.png")))
+
+
+def draw_profile(output, hist, suffix):
+    canvas = ROOT.TCanvas(f"c_{hist.GetName()}", "", 900, 700)
+    canvas.SetGrid()
+    hist.SetMarkerStyle(20)
+    hist.SetMarkerSize(0.8)
+    hist.SetLineWidth(2)
+    hist.SetMinimum(0.0)
+    hist.Draw("E1")
+    canvas.Write()
+    canvas.SaveAs(str(Path(output).with_suffix(f".{suffix}.png")))
+
+
+def write_histograms(output, histograms):
+    out_file = ROOT.TFile.Open(output, "RECREATE")
+    for hist in histograms.values():
+        hist.Write()
+
+    draw_histogram(output, histograms["leading_raw"], "leading_raw")
+    draw_histogram(output, histograms["subleading_raw"], "subleading_raw")
+    draw_histogram(output, histograms["leading_ref"], "leading_ref")
+    draw_histogram(output, histograms["subleading_ref"], "subleading_ref")
+    draw_histogram(output, histograms["z_pt_vs_leading_jet_pt"], "z_pt_vs_leading_jet_pt")
+    draw_histogram(
+        output,
+        histograms["z_pt_vs_truth_matched_leading_jet_pt"],
+        "z_pt_vs_truth_matched_leading_jet_pt",
+    )
+    draw_histogram(
+        output,
+        histograms["z_pt_vs_truth_matched_leading_reco_jet_pt"],
+        "z_pt_vs_truth_matched_leading_reco_jet_pt",
+    )
+    draw_histogram(
+        output,
+        histograms["z_pt_vs_truth_matched_truth_jet_pt"],
+        "z_pt_vs_truth_matched_truth_jet_pt",
+    )
+    for jet_label in ("leading", "subleading"):
+        for scale_key, _, _, _ in JET_CLUSTER_ENERGY_SCALES:
+            draw_histogram(
+                output,
+                histograms[f"{jet_label}_{scale_key}_cluster_energy"],
+                f"{jet_label}_{scale_key}_cluster_energy",
+            )
+    for scale_key, _ in LEADING_CLUSTER_PT_SCALES:
+        draw_histogram(
+            output,
+            histograms[f"leading_{scale_key}_cluster_pt"],
+            f"leading_{scale_key}_cluster_pt",
+        )
+    draw_profile(output, histograms["jet_pt_over_ref"], "jet_pt_over_ref")
+    draw_profile(output, histograms["leading_pt_over_ref"], "leading_pt_over_ref")
+    draw_profile(output, histograms["subleading_pt_over_ref"], "subleading_pt_over_ref")
+    out_file.Close()
+
+
+def print_summary(counters, output):
+    print(f"events processed: {counters['events']}")
+    print(f"events in |mll - {Z_MASS}| < {Z_WINDOW} GeV: {counters['z']}")
+    print(f"events with DeltaPhi(leading jet, Z) > {JET_Z_DPHI_MIN}: {counters['leading_dphi']}")
+    print(
+        "events passing second-jet veto "
+        f"pT2 < max({SECOND_JET_ABS_PT_MAX} GeV, "
+        f"{SECOND_JET_REF_PT_FRACTION_MAX} * pTref): {counters['second_jet_veto']}"
+    )
+    print(f"events with leading reco jet pT > {JET_PT_MIN} GeV: {counters['leading']}")
+    print(f"selected events filled for leading reco jet: {counters['selected_leading']}")
+    print(f"truth jets matched to leading reco jet: {counters['leading_matched']}")
+    print(
+        "selected leading reco jets without truth match: "
+        f"{counters['selected_leading'] - counters['leading_matched']}"
+    )
+    print(f"selected events with subleading reco jet pT > {JET_PT_MIN} GeV: {counters['subleading']}")
+    print(f"truth jets matched to subleading reco jet: {counters['subleading_matched']}")
+    print(f"subleading reco jets without truth match: {counters['subleading'] - counters['subleading_matched']}")
+    print(f"wrote {output}")
+
+
+def main():
+    args = parse_args()
+    histograms = define_histograms()
+    counters = run_analysis(args, histograms)
+    write_histograms(args.output, histograms)
+    print_summary(counters, args.output)
+
+
+if __name__ == "__main__":
+    main()

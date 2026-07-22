@@ -59,6 +59,22 @@ def make_hist_from_bin_contents(hist_name, hist_title, bin_edges, bin_contents):
 
     return hist
 
+# get linear binning
+def get_bins(x_min, x_max, n_bins):
+    return np.linspace(x_min, x_max, n_bins + 1)
 
 def get_bins_log(x_min, x_max, nbins):
     return np.array(np.geomspace(x_min, x_max, nbins + 1))
+
+# make 2d histogram
+def make_numpy_hists_2d(hist_name, hist_title, x_bin_edges, x_values, y_bin_edges, y_values):
+    x_edges = np.asarray(x_bin_edges, dtype=np.float64)
+    y_edges = np.asarray(y_bin_edges, dtype=np.float64)
+    hist = ROOT.TH2D(hist_name, hist_title, len(x_edges) - 1, x_edges, len(y_edges) - 1, y_edges)
+
+    for x_val, y_val in zip(x_values, y_values):
+        hist.Fill(x_val, y_val)
+
+    hist.GetXaxis().SetTitle("x")
+    hist.GetYaxis().SetTitle("y")
+    return hist

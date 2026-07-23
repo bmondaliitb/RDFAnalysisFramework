@@ -180,6 +180,6 @@ def calculate_sigma_iqr_in_x_bins(x_variable, y_variable, x_bin_edges, min_entri
         q16, q50, q84 = np.quantile(y_bin, [0.16, 0.50, 0.84])
 
         median_values.append(float(q50))
-        sigma_iqr68_values.append(float((q84 - q16) / 2.0))
+        sigma_iqr68_values.append(float((q84 - q16)) )
 
     return np.array(median_values), np.array(sigma_iqr68_values)

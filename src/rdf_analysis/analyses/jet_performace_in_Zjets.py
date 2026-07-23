@@ -8,19 +8,15 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import argparse
-from dataclasses import dataclass, field
-from typing import Optional, Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Optional, List, Tuple
 
 import numpy as np
 import ROOT
-from numpy.ma.core import argmax
-
-import uproot
-
-from rdf_analysis.stats.histograms import make_numpy_hists_2d, get_bins_log, get_bins
-
 
 from rdf_analysis.core import NtupleProcessor, awkward_to_numpy
+from rdf_analysis.stats.fits import *
+from rdf_analysis.stats.histograms import *
 
 
 
@@ -264,8 +260,6 @@ def calculate_pt_from_eta(energy, eta):
 # EVENT PROCESSOR
 # ============================================================================
 
-
-
 class ZJetsAnalysis:
 
     def __init__(self, input_files: List[str], tree_name: str, output_path: str, max_events: int = -1):
@@ -298,9 +292,21 @@ class ZJetsAnalysis:
         leading_jet_pt=[]
         z_pt=[]
         truth_jet_pt=[]
+        truth_jet_energy=[]
+        # pt
         leading_jet_from_cluster_pt_em = []
         leading_jet_from_cluster_pt_lcw = []
         leading_jet_from_cluster_pt_ml = []
+        pt_ref_from_cluster_pt_em = []
+        pt_ref_from_cluster_pt_lcw = []
+        pt_ref_from_cluster_pt_ml = []
+        # energy
+        leading_jet_from_cluster_energy_em = []
+        leading_jet_from_cluster_energy_lcw = []
+        leading_jet_from_cluster_energy_ml = []
+
+        # pTref
+        pt_ref_list = []
 
         for arrays in self.processor.iter_arrays(columns):
             for (
@@ -359,6 +365,7 @@ class ZJetsAnalysis:
                 # calculate pTZ, pTref
                 pt_ref = project_jet_on_z_axis(reco_jets.leading_jet.pt, reco_jets.leading_jet.phi,
                                                leptons.pt, leptons.phi)
+                pt_ref_list.append(pt_ref)
 
                 # subleading jet pt cut
                 if len(reco_jets.to_array)>1:
@@ -387,17 +394,33 @@ class ZJetsAnalysis:
                     phi=awkward_to_numpy(jet_cluster_phi[reco_jets.leading_jet_index]),
                 )
 
-                # fill histograms
+                # fill variables for later histograms
                 leading_jet_pt.append(reco_jets.leading_jet.pt)
                 truth_jet_pt.append(reco_jets.get_truth_jet_matched_to_leading_jet(truth_jets).pt)
+                truth_jet_energy.append(reco_jets.get_truth_jet_matched_to_leading_jet(truth_jets).energy)
                 z_pt.append(z_transverse_vector(leptons.pt, leptons.phi)[2])
 
-                leading_jet_from_cluster_pt_em.append(calculate_pt_from_eta(cluster_leading_jet.jet_energy_em,
-                                                                            reco_jets.leading_jet.eta))
-                leading_jet_from_cluster_pt_lcw.append(calculate_pt_from_eta(cluster_leading_jet.jet_energy_lcw,
-                                                                             reco_jets.leading_jet.eta))
-                leading_jet_from_cluster_pt_ml.append(calculate_pt_from_eta(cluster_leading_jet.jet_energy_ml,
-                                                                            reco_jets.leading_jet.eta))
+                # jet pt
+                cluster_pt_em = calculate_pt_from_eta(cluster_leading_jet.jet_energy_em, reco_jets.leading_jet.eta)
+                leading_jet_from_cluster_pt_em.append(cluster_pt_em)
+                cluster_pt_lcw = calculate_pt_from_eta(cluster_leading_jet.jet_energy_lcw, reco_jets.leading_jet.eta)
+                leading_jet_from_cluster_pt_lcw.append(cluster_pt_lcw)
+                cluster_pt_ml = calculate_pt_from_eta(cluster_leading_jet.jet_energy_ml, reco_jets.leading_jet.eta)
+                leading_jet_from_cluster_pt_ml.append(cluster_pt_ml)
+
+                pt_ref_from_cluster_pt_em.append(
+                    project_jet_on_z_axis(cluster_pt_em, reco_jets.leading_jet.phi,
+                                               leptons.pt, leptons.phi)) # the phi should be same as reco jet phi
+                pt_ref_from_cluster_pt_lcw.append(
+                    project_jet_on_z_axis(cluster_pt_lcw, reco_jets.leading_jet.phi,
+                                               leptons.pt, leptons.phi)) # the phi should be same as reco jet phi
+                pt_ref_from_cluster_pt_ml.append(
+                    project_jet_on_z_axis(cluster_pt_ml, reco_jets.leading_jet.phi,
+                                          leptons.pt, leptons.phi))  # the phi should be same as reco jet phi
+                # jet energy
+                leading_jet_from_cluster_energy_em.append(cluster_leading_jet.jet_energy_em)
+                leading_jet_from_cluster_energy_lcw.append(cluster_leading_jet.jet_energy_lcw)
+                leading_jet_from_cluster_energy_ml.append(cluster_leading_jet.jet_energy_ml)
 
 
         # make histograms
@@ -424,6 +447,39 @@ class ZJetsAnalysis:
         self.histograms["hist_pt_truth_jet_vs_leading_jet_from_cluster_em"] = hist_pt_truth_jet_vs_leading_jet_from_cluster_em
         self.histograms["hist_pt_truth_jet_vs_leading_jet_from_cluster_lcw"] = hist_pt_truth_jet_vs_leading_jet_from_cluster_lcw
         self.histograms["hist_pt_truth_jet_vs_leading_jet_from_cluster_ml"] = hist_pt_truth_jet_vs_leading_jet_from_cluster_ml
+
+        # truth jet pT bins calculate the IQR
+        truth_jet_pt_bins = get_bins(0, 500, 50)
+
+        # define response first
+        # response = abs (leading jet projected on pT (Z)/|pT(Z)|^2)
+        response_em = np.array(pt_ref_from_cluster_pt_em)/np.array(z_pt)**2
+        response_lcw= np.array(pt_ref_from_cluster_pt_lcw)/np.array(z_pt)**2
+        response_ml= np.array(pt_ref_from_cluster_pt_ml)/np.array(z_pt)**2
+
+
+        # store jet energy at different scales for x-bins
+        median_em, sigma_em = calculate_sigma_iqr_in_x_bins(truth_jet_pt,
+                np.array(leading_jet_from_cluster_energy_em)/np.array(truth_jet_energy), truth_jet_pt_bins)
+        median_lcw, sigma_lcw = calculate_sigma_iqr_in_x_bins(truth_jet_pt,
+                np.array(leading_jet_from_cluster_energy_lcw)/np.array(truth_jet_energy), truth_jet_pt_bins)
+        median_ml, sigma_ml = calculate_sigma_iqr_in_x_bins(truth_jet_pt,
+                np.array(leading_jet_from_cluster_energy_ml)/np.array(truth_jet_energy), truth_jet_pt_bins)
+
+        # make histograms
+        hist_median_em = make_hist_from_bin_contents("hist_mean_em", "", truth_jet_pt_bins, median_em)
+        hist_median_lcw = make_hist_from_bin_contents("hist_mean_lcw", "", truth_jet_pt_bins, median_lcw)
+        hist_median_ml = make_hist_from_bin_contents("hist_mean_ml", "", truth_jet_pt_bins, median_ml)
+        hist_sigma_em = make_hist_from_bin_contents("hist_sigma_em", "", truth_jet_pt_bins, sigma_em/2*median_em)
+        hist_sigma_lcw = make_hist_from_bin_contents("hist_sigma_lcw", "", truth_jet_pt_bins, sigma_lcw/2*median_lcw)
+        hist_sigma_ml = make_hist_from_bin_contents("hist_sigma_ml", "", truth_jet_pt_bins, sigma_ml/2*median_ml)
+
+        self.histograms["hist_mean_em"] = hist_median_em
+        self.histograms["hist_mean_lcw"] = hist_median_lcw
+        self.histograms["hist_mean_ml"] = hist_median_ml
+        self.histograms["hist_sigma_em"] = hist_sigma_em
+        self.histograms["hist_sigma_lcw"] = hist_sigma_lcw
+        self.histograms["hist_sigma_ml"] = hist_sigma_ml
 
 
     def write_histogram(self):

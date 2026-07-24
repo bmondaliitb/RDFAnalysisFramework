@@ -33,8 +33,8 @@ class Config:
     JET_PT_MIN = 10.0
     JET_Z_DPHI_MIN = 2.8
     SECOND_JET_ABS_PT_MAX = 12.0
-    SECOND_JET_REF_PT_FRACTION_MAX = 0.15
-    
+    SECOND_JET_REF_PT_FRACTION_MAX = 0.10
+
     # Matching
     TRUTH_MATCH_DR = 0.4
     
@@ -57,7 +57,6 @@ class Config:
         ("truth", "cluster truth E"),
         ("ml", "cluster ML E"),
     )
-
 
 # ============================================================================
 # DATA MODELS
@@ -133,22 +132,44 @@ class Jet:
         dr=np.array(dr)
         return np.any(dr < Config.TRUTH_MATCH_DR)
 
-    def get_truth_jet_matched_to_leading_jet(self, truth_jets: "Jet") -> Optional["Jet"]:
-        """Return the truth jet matched to the leading jet, if any."""
+    #def get_truth_jet_matched_to_leading_jet(self, truth_jets: "Jet") -> Optional["Jet"]:
+    #    """Return the truth jet matched to the leading jet, if any."""
+    #    leading_jet = self.leading_jet
+    #    truth_matched_jets = []
+    #    for truth_jet in truth_jets.to_array:
+    #        if delta_r(leading_jet.eta, leading_jet.phi, truth_jet.eta, truth_jet.phi) < Config.TRUTH_MATCH_DR:
+    #            truth_matched_jets.append(truth_jet)
+
+    #    if len(truth_matched_jets) == 0:
+    #        return None
+    #    if len(truth_matched_jets) >= 1:
+    #        # find the closest pt matched one
+    #        closest_jet = min(truth_matched_jets, key=lambda jet: abs(jet.pt - leading_jet.pt))
+    #        return closest_jet
+
+    def get_truth_jet_matched_to_leading_jet(
+            self,
+            truth_jets: "Jet",
+    ) -> Optional["Jet"]:
         leading_jet = self.leading_jet
-        truth_matched_jets = []
+        candidates = []
+
         for truth_jet in truth_jets.to_array:
-            if delta_r(leading_jet.eta, leading_jet.phi, truth_jet.eta, truth_jet.phi) < Config.TRUTH_MATCH_DR:
-                truth_matched_jets.append(truth_jet)
+            dr = delta_r(
+                leading_jet.eta,
+                leading_jet.phi,
+                truth_jet.eta,
+                truth_jet.phi,
+            )
 
-        if len(truth_matched_jets) == 0:
+            if dr < Config.TRUTH_MATCH_DR:
+                pt_difference = abs(truth_jet.pt - leading_jet.pt)
+                candidates.append((dr, pt_difference, truth_jet))
+
+        if not candidates:
             return None
-        if len(truth_matched_jets) >= 1:
-            # find the closest pt matched one
-            closest_jet = min(truth_matched_jets, key=lambda jet: abs(jet.pt - leading_jet.pt))
-            return closest_jet
 
-
+        return min(candidates, key=lambda candidate: (candidate[0], candidate[1]))[2]
 
 @dataclass
 class Lepton:
@@ -160,7 +181,6 @@ class Lepton:
     @property
     def count(self) -> int:
         return len(self.pt)
-
 
 @dataclass
 class Cluster:
@@ -175,25 +195,27 @@ class Cluster:
     @property
     def jet_energy_em(self):
         """ Construct jet energy from cluster"""
-        return np.sum(self.energy_em)
+        return np.sum(self.energy_em, where=self.energy_em > 0)
 
     @property
     def jet_energy_lcw(self):
-        return np.sum(self.energy_lcw)
+        return np.sum(self.energy_lcw, where=self.energy_lcw > 0)
 
     @property
     def jet_energy_ml(self):
-        return np.sum(self.energy_ml)
+        return np.sum(self.energy_ml, where=self.energy_ml > 0)
+
+    @property
+    def jet_energy_truth(self):
+        return np.sum(self.energy_truth, where=self.energy_truth > 0)
 
 # ============================================================================
 # PHYSICS UTILITIES
 # ============================================================================
 
-
 def delta_phi(phi1: float, phi2: float) -> float:
     """Delta-phi in [-pi, pi]."""
     return ROOT.TVector2.Phi_mpi_pi(phi1 - phi2)
-
 
 def dilepton_mass(pt: np.ndarray, eta: np.ndarray, phi: np.ndarray) -> float:
     """Invariant mass of two leptons (massless)."""
@@ -204,7 +226,6 @@ def dilepton_mass(pt: np.ndarray, eta: np.ndarray, phi: np.ndarray) -> float:
     mass2 = 2.0 * pt[0] * pt[1] * (np.cosh(deta) - np.cos(dphi))
     return np.sqrt(max(mass2, 0.0))
 
-
 def z_transverse_vector(lep_pt: np.ndarray, lep_phi: np.ndarray) -> Tuple[float, float, float]:
     """Z boson transverse momentum vector."""
     lep_pt = np.asarray(lep_pt[:2], dtype=float)
@@ -214,7 +235,6 @@ def z_transverse_vector(lep_pt: np.ndarray, lep_phi: np.ndarray) -> Tuple[float,
     z_pt = np.hypot(z_x, z_y)
     return z_x, z_y, z_pt
 
-
 def z_phi(lep_pt: np.ndarray, lep_phi: np.ndarray) -> float:
     """Z boson azimuthal angle."""
     z_x, z_y, z_pt = z_transverse_vector(lep_pt, lep_phi)
@@ -222,16 +242,12 @@ def z_phi(lep_pt: np.ndarray, lep_phi: np.ndarray) -> float:
         return np.nan
     return np.arctan2(z_y, z_x)
 
-
 def delta_phi_to_z(jet_phi: float, lep_pt: np.ndarray, lep_phi: np.ndarray) -> float:
     """Absolute delta-phi between jet and Z."""
     event_z_phi = z_phi(lep_pt, lep_phi)
     if not np.isfinite(event_z_phi):
         return np.nan
     return abs(delta_phi(jet_phi, event_z_phi))
-
-
-
 
 def project_jet_on_z_axis(jet_pt: float, jet_phi: float, lep_pt: np.ndarray, lep_phi: np.ndarray) -> float:
     """Jet pT projected onto Z direction."""
@@ -249,12 +265,15 @@ def delta_r(eta1: float, phi1: float, eta2: float, phi2: float) -> float:
     dphi = delta_phi(phi1, phi2)
     return np.hypot(deta, dphi)
 
-def calculate_pt_from_eta(energy, eta):
+def calculate_pt_from_energy(energy, eta):
     """
     Calculates jet pT from Energy and Pseudorapidity (eta).
     Assumes massless jet approximation.
     """
     return energy / np.cosh(eta)
+
+def compare_energy_scales(sigma_reco, sigma_truth):
+    return np.sqrt(np.abs(sigma_reco**2 - sigma_truth**2))
 
 # ============================================================================
 # EVENT PROCESSOR
@@ -297,13 +316,17 @@ class ZJetsAnalysis:
         leading_jet_from_cluster_pt_em = []
         leading_jet_from_cluster_pt_lcw = []
         leading_jet_from_cluster_pt_ml = []
+        leading_jet_from_cluster_pt_truth = []
+        # pt_ref
         pt_ref_from_cluster_pt_em = []
         pt_ref_from_cluster_pt_lcw = []
         pt_ref_from_cluster_pt_ml = []
+        pt_ref_from_cluster_pt_truth = []
         # energy
         leading_jet_from_cluster_energy_em = []
         leading_jet_from_cluster_energy_lcw = []
         leading_jet_from_cluster_energy_ml = []
+        leading_jet_from_cluster_energy_truth = []
 
         # pTref
         pt_ref_list = []
@@ -401,12 +424,14 @@ class ZJetsAnalysis:
                 z_pt.append(z_transverse_vector(leptons.pt, leptons.phi)[2])
 
                 # jet pt
-                cluster_pt_em = calculate_pt_from_eta(cluster_leading_jet.jet_energy_em, reco_jets.leading_jet.eta)
+                cluster_pt_em = calculate_pt_from_energy(cluster_leading_jet.jet_energy_em, reco_jets.leading_jet.eta)
                 leading_jet_from_cluster_pt_em.append(cluster_pt_em)
-                cluster_pt_lcw = calculate_pt_from_eta(cluster_leading_jet.jet_energy_lcw, reco_jets.leading_jet.eta)
+                cluster_pt_lcw = calculate_pt_from_energy(cluster_leading_jet.jet_energy_lcw, reco_jets.leading_jet.eta)
                 leading_jet_from_cluster_pt_lcw.append(cluster_pt_lcw)
-                cluster_pt_ml = calculate_pt_from_eta(cluster_leading_jet.jet_energy_ml, reco_jets.leading_jet.eta)
+                cluster_pt_ml = calculate_pt_from_energy(cluster_leading_jet.jet_energy_ml, reco_jets.leading_jet.eta)
                 leading_jet_from_cluster_pt_ml.append(cluster_pt_ml)
+                cluster_pt_truth = calculate_pt_from_energy(cluster_leading_jet.jet_energy_truth, reco_jets.leading_jet.eta)
+                leading_jet_from_cluster_pt_truth.append(cluster_pt_truth)
 
                 pt_ref_from_cluster_pt_em.append(
                     project_jet_on_z_axis(cluster_pt_em, reco_jets.leading_jet.phi,
@@ -417,10 +442,14 @@ class ZJetsAnalysis:
                 pt_ref_from_cluster_pt_ml.append(
                     project_jet_on_z_axis(cluster_pt_ml, reco_jets.leading_jet.phi,
                                           leptons.pt, leptons.phi))  # the phi should be same as reco jet phi
+                pt_ref_from_cluster_pt_truth.append(
+                    project_jet_on_z_axis(cluster_pt_truth, reco_jets.leading_jet.phi,
+                                          leptons.pt, leptons.phi))  # the phi should be same as reco jet phi
                 # jet energy
                 leading_jet_from_cluster_energy_em.append(cluster_leading_jet.jet_energy_em)
                 leading_jet_from_cluster_energy_lcw.append(cluster_leading_jet.jet_energy_lcw)
                 leading_jet_from_cluster_energy_ml.append(cluster_leading_jet.jet_energy_ml)
+                leading_jet_from_cluster_energy_truth.append(cluster_leading_jet.jet_energy_truth)
 
 
         # make histograms
@@ -448,38 +477,84 @@ class ZJetsAnalysis:
         self.histograms["hist_pt_truth_jet_vs_leading_jet_from_cluster_lcw"] = hist_pt_truth_jet_vs_leading_jet_from_cluster_lcw
         self.histograms["hist_pt_truth_jet_vs_leading_jet_from_cluster_ml"] = hist_pt_truth_jet_vs_leading_jet_from_cluster_ml
 
+        # z_pt vs jet pt
+        hist_pt_z_vs_leading_jet_from_cluster_em = make_numpy_hists_2d(
+            "hist_pt_z_vs_leading_jet_from_cluster_em","", x_bin_edges, z_pt, y_bin_edges, leading_jet_from_cluster_pt_em)
+        hist_pt_z_vs_leading_jet_from_cluster_lcw = make_numpy_hists_2d(
+            "hist_pt_z_vs_leading_jet_from_cluster_lcw","", x_bin_edges, z_pt, y_bin_edges, leading_jet_from_cluster_pt_lcw)
+        hist_pt_z_vs_leading_jet_from_cluster_ml = make_numpy_hists_2d(
+            "hist_pt_z_vs_leading_jet_from_cluster_ml","", x_bin_edges, z_pt, y_bin_edges, leading_jet_from_cluster_pt_ml)
+        hist_pt_z_vs_leading_jet_from_cluster_truth= make_numpy_hists_2d(
+            "hist_pt_z_vs_leading_jet_from_cluster_truth","", x_bin_edges, z_pt, y_bin_edges, leading_jet_from_cluster_pt_truth)
+        self.histograms["hist_pt_z_vs_leading_jet_from_cluster_em"] = hist_pt_z_vs_leading_jet_from_cluster_em
+        self.histograms["hist_pt_z_vs_leading_jet_from_cluster_lcw"] = hist_pt_z_vs_leading_jet_from_cluster_lcw
+        self.histograms["hist_pt_z_vs_leading_jet_from_cluster_ml"] = hist_pt_z_vs_leading_jet_from_cluster_ml
+        self.histograms["hist_pt_z_vs_leading_jet_from_cluster_truth"] = hist_pt_z_vs_leading_jet_from_cluster_truth
+
         # truth jet pT bins calculate the IQR
-        truth_jet_pt_bins = get_bins(0, 500, 50)
+        truth_jet_pt_bins = get_bins_log(10, 500, 25)
 
         # define response first
         # response = abs (leading jet projected on pT (Z)/|pT(Z)|^2)
-        response_em = np.array(pt_ref_from_cluster_pt_em)/np.array(z_pt)**2
-        response_lcw= np.array(pt_ref_from_cluster_pt_lcw)/np.array(z_pt)**2
-        response_ml= np.array(pt_ref_from_cluster_pt_ml)/np.array(z_pt)**2
+        response_em = np.array(pt_ref_from_cluster_pt_em)/np.array(z_pt) # projection already divide once by z_pt
+        response_lcw= np.array(pt_ref_from_cluster_pt_lcw)/np.array(z_pt)
+        response_ml= np.array(pt_ref_from_cluster_pt_ml)/np.array(z_pt)
+        response_truth = np.array(pt_ref_from_cluster_pt_truth)/np.array(z_pt)
 
+        # get binning between 0 to 1
+        response_binning = get_bins(0, 1, 20)
+        # save response histograms
+        hist_response_em = make_numpy_hist("hist_response_em", "", response_binning, response_em)
+        hist_response_lcw = make_numpy_hist("hist_response_lcw", "", response_binning, response_lcw)
+        hist_response_ml = make_numpy_hist("hist_response_ml", "", response_binning, response_ml)
+        hist_response_truth = make_numpy_hist("hist_response_truth", "", response_binning, response_truth)
+
+        self.histograms["hist_response_em"] = hist_response_em
+        self.histograms["hist_response_lcw"] = hist_response_lcw
+        self.histograms["hist_response_ml"] = hist_response_ml
+        self.histograms["hist_response_truth"] = hist_response_truth
 
         # store jet energy at different scales for x-bins
-        median_em, sigma_em = calculate_sigma_iqr_in_x_bins(truth_jet_pt,
-                np.array(leading_jet_from_cluster_energy_em)/np.array(truth_jet_energy), truth_jet_pt_bins)
-        median_lcw, sigma_lcw = calculate_sigma_iqr_in_x_bins(truth_jet_pt,
-                np.array(leading_jet_from_cluster_energy_lcw)/np.array(truth_jet_energy), truth_jet_pt_bins)
-        median_ml, sigma_ml = calculate_sigma_iqr_in_x_bins(truth_jet_pt,
-                np.array(leading_jet_from_cluster_energy_ml)/np.array(truth_jet_energy), truth_jet_pt_bins)
-
+        median_em, sigma_em = calculate_sigma_iqr_in_x_bins(truth_jet_pt, response_em, truth_jet_pt_bins)
+        median_lcw, sigma_lcw = calculate_sigma_iqr_in_x_bins(truth_jet_pt, response_lcw, truth_jet_pt_bins)
+        median_ml, sigma_ml = calculate_sigma_iqr_in_x_bins(truth_jet_pt, response_ml, truth_jet_pt_bins)
+        median_truth, sigma_truth = calculate_sigma_iqr_in_x_bins(truth_jet_pt, response_truth, truth_jet_pt_bins)
         # make histograms
         hist_median_em = make_hist_from_bin_contents("hist_mean_em", "", truth_jet_pt_bins, median_em)
         hist_median_lcw = make_hist_from_bin_contents("hist_mean_lcw", "", truth_jet_pt_bins, median_lcw)
         hist_median_ml = make_hist_from_bin_contents("hist_mean_ml", "", truth_jet_pt_bins, median_ml)
+        hist_median_truth = make_hist_from_bin_contents("hist_mean_truth", "", truth_jet_pt_bins, median_truth)
         hist_sigma_em = make_hist_from_bin_contents("hist_sigma_em", "", truth_jet_pt_bins, sigma_em/2*median_em)
         hist_sigma_lcw = make_hist_from_bin_contents("hist_sigma_lcw", "", truth_jet_pt_bins, sigma_lcw/2*median_lcw)
         hist_sigma_ml = make_hist_from_bin_contents("hist_sigma_ml", "", truth_jet_pt_bins, sigma_ml/2*median_ml)
+        hist_sigma_truth = make_hist_from_bin_contents("hist_sigma_truth", "", truth_jet_pt_bins, sigma_truth/2*median_truth)
 
         self.histograms["hist_mean_em"] = hist_median_em
         self.histograms["hist_mean_lcw"] = hist_median_lcw
         self.histograms["hist_mean_ml"] = hist_median_ml
+        self.histograms["hist_mean_truth"] = hist_median_truth
+
         self.histograms["hist_sigma_em"] = hist_sigma_em
         self.histograms["hist_sigma_lcw"] = hist_sigma_lcw
         self.histograms["hist_sigma_ml"] = hist_sigma_ml
+        self.histograms["hist_sigma_truth"] = hist_sigma_truth
+
+        ## compare performance of different energy scales
+        performance_em = compare_energy_scales(sigma_em, sigma_truth)
+        performance_lcw = compare_energy_scales(sigma_lcw, sigma_truth)
+        performance_ml = compare_energy_scales(sigma_ml, sigma_truth)
+
+        # save them in histograms
+        hist_performance_em = make_hist_from_bin_contents("hist_performance_em", "",
+                                                          truth_jet_pt_bins, performance_em)
+        hist_performance_lcw = make_hist_from_bin_contents("hist_performance_lcw", "",
+                                                           truth_jet_pt_bins, performance_lcw)
+        hist_performance_ml = make_hist_from_bin_contents("hist_performance_ml", "",
+                                                          truth_jet_pt_bins, performance_ml)
+
+        self.histograms["hist_performance_em"] = hist_performance_em
+        self.histograms["hist_performance_lcw"] = hist_performance_lcw
+        self.histograms["hist_performance_ml"] = hist_performance_ml
 
 
     def write_histogram(self):
@@ -502,8 +577,6 @@ class ZJetsAnalysis:
                 print(f"{cut:30s}: {count:10d} ({eff:5.1f}%)")
         print("="*60 + "\n")
 
-
-
 # ============================================================================
 # CLI AND MAIN
 # ============================================================================
@@ -518,7 +591,6 @@ def parse_args():
     parser.add_argument("--nEvents", type=int, default=-1, help="Max events to process")
     parser.add_argument("--output", default="jet_performance.root", help="Output ROOT file")
     return parser.parse_args()
-
 
 def main():
     ROOT.gROOT.SetBatch(True)

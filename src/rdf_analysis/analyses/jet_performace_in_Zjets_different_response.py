@@ -9,7 +9,7 @@ if __package__ in {None, ""}:
 
 import argparse
 from dataclasses import dataclass
-from typing import Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple
 
 import numpy as np
 import ROOT
@@ -41,6 +41,8 @@ class Config:
     # Units
     GEV = 0.001
     JET_ENERGY_HIST_MAX = 4000.0
+    CLUSTER_ENERGY_HIST_N_BINS = 100
+    TRUTH_JET_PT_CLUSTER_ENERGY_RANGE = (100.0, 500.0)
     
     # Energy scales
     ENERGY_SCALES = (
@@ -275,6 +277,69 @@ def calculate_pt_from_energy(energy, eta):
 def compare_energy_scales(sigma_reco, sigma_truth):
     return np.sqrt(np.abs(sigma_reco**2 - sigma_truth**2))
 
+
+def append_cluster_energies_in_truth_jet_pt_range(
+        cluster_energy_by_scale: Dict[str, List[float]],
+        truth_jet_pt: float,
+        cluster: Cluster,
+        truth_pt_range: Tuple[float, float] = Config.TRUTH_JET_PT_CLUSTER_ENERGY_RANGE,
+) -> None:
+    """Collect individual leading-jet cluster energies in the requested truth-jet pT range."""
+    pt_min, pt_max = truth_pt_range
+
+    if not (np.isfinite(truth_jet_pt) and pt_min <= truth_jet_pt <= pt_max):
+        return
+
+    cluster_energy_arrays = {
+        "em": cluster.energy_em,
+        "lcw": cluster.energy_lcw,
+        "ml": cluster.energy_ml,
+        "truth": cluster.energy_truth,
+    }
+
+    for scale, values in cluster_energy_arrays.items():
+        values = np.asarray(values, dtype=np.float64)
+        selected_values = values[np.isfinite(values) & (values > 0.0)]
+        cluster_energy_by_scale[scale].extend(selected_values.tolist())
+
+
+def make_cluster_energy_histograms_for_truth_jet_pt_range(
+        cluster_energy_by_scale: Dict[str, List[float]],
+        truth_pt_range: Tuple[float, float] = Config.TRUTH_JET_PT_CLUSTER_ENERGY_RANGE,
+) -> Dict[str, ROOT.TH1D]:
+    """Build cluster-energy histograms for the configured truth-jet pT range."""
+    pt_min, pt_max = truth_pt_range
+    energy_bin_edges = get_bins_log(
+        0.3,
+        500,
+        50,
+    )
+
+    histograms = {}
+    for scale, cluster_energy in cluster_energy_by_scale.items():
+        values = np.asarray(cluster_energy, dtype=np.float64)
+        selected_values = values[np.isfinite(values) & (values > 0.0)]
+        hist_name = (
+            f"hist_cluster_energy_truth_jet_pt_{int(pt_min)}_to_{int(pt_max)}_{scale}"
+        )
+        scale_label = scale.upper() if scale != "truth" else "truth"
+        hist = ROOT.TH1D(
+            hist_name,
+            (
+                f"Cluster {scale_label} energy, {pt_min:g} #leq "
+                f"p_{{T}}^{{truth jet}} #leq {pt_max:g} GeV"
+            ),
+            len(energy_bin_edges) - 1,
+            np.asarray(energy_bin_edges, dtype=np.float64),
+        )
+        hist.GetXaxis().SetTitle(f"E_{{cluster}}^{{{scale_label}}} [GeV]")
+        hist.GetYaxis().SetTitle("Clusters")
+        for value in selected_values:
+            hist.Fill(float(value))
+        histograms[hist_name] = hist
+
+    return histograms
+
 # ============================================================================
 # EVENT PROCESSOR
 # ============================================================================
@@ -327,6 +392,12 @@ class ZJetsAnalysis:
         leading_jet_from_cluster_energy_lcw = []
         leading_jet_from_cluster_energy_ml = []
         leading_jet_from_cluster_energy_truth = []
+        cluster_energy_in_truth_jet_pt_range = {
+            "em": [],
+            "lcw": [],
+            "ml": [],
+            "truth": [],
+        }
 
         # pTref
         pt_ref_list = []
@@ -399,6 +470,8 @@ class ZJetsAnalysis:
 
                 if not is_leading_jet_truth_matched: continue
                 self.event_counts["truth_matched"] += 1
+                matched_truth_jet = reco_jets.get_truth_jet_matched_to_leading_jet(truth_jets)
+                if matched_truth_jet is None: continue
 
                 if Config.DEBUG:
                     if is_leading_jet_truth_matched:
@@ -419,9 +492,14 @@ class ZJetsAnalysis:
 
                 # fill variables for later histograms
                 leading_jet_pt.append(reco_jets.leading_jet.pt)
-                truth_jet_pt.append(reco_jets.get_truth_jet_matched_to_leading_jet(truth_jets).pt)
-                truth_jet_energy.append(reco_jets.get_truth_jet_matched_to_leading_jet(truth_jets).energy)
+                truth_jet_pt.append(matched_truth_jet.pt)
+                truth_jet_energy.append(matched_truth_jet.energy)
                 z_pt.append(z_transverse_vector(leptons.pt, leptons.phi)[2])
+                append_cluster_energies_in_truth_jet_pt_range(
+                    cluster_energy_in_truth_jet_pt_range,
+                    matched_truth_jet.pt,
+                    cluster_leading_jet,
+                )
 
                 # jet pt
                 cluster_pt_em = calculate_pt_from_energy(cluster_leading_jet.jet_energy_em, reco_jets.leading_jet.eta)
@@ -502,15 +580,21 @@ class ZJetsAnalysis:
         self.histograms["hist_pt_z_vs_leading_jet_from_cluster_ml"] = hist_pt_z_vs_leading_jet_from_cluster_ml
         self.histograms["hist_pt_z_vs_leading_jet_from_cluster_truth"] = hist_pt_z_vs_leading_jet_from_cluster_truth
 
+        self.histograms.update(
+            make_cluster_energy_histograms_for_truth_jet_pt_range(
+                cluster_energy_in_truth_jet_pt_range,
+            )
+        )
+
         # truth jet pT bins calculate the IQR
         truth_z_pt_bins = get_bins_log(10, 500, 25)
 
         # define response first
-        # response = abs (leading jet projected on pT (Z)/|pT(Z)|^2)
-        response_em = np.array(pt_ref_from_cluster_pt_em)/np.array(z_pt) # projection already divide once by z_pt
-        response_lcw= np.array(pt_ref_from_cluster_pt_lcw)/np.array(z_pt)
-        response_ml= np.array(pt_ref_from_cluster_pt_ml)/np.array(z_pt)
-        response_truth = np.array(pt_ref_from_cluster_pt_truth)/np.array(z_pt)
+        # response = pT^jet_reco / pT^jet_truth
+        response_em = np.array(leading_jet_from_cluster_energy_em)/np.array(truth_jet_energy)
+        response_lcw= np.array(leading_jet_from_cluster_energy_lcw)/np.array(truth_jet_energy)
+        response_ml= np.array(leading_jet_from_cluster_energy_ml)/np.array(truth_jet_energy)
+        response_truth = np.array(leading_jet_from_cluster_energy_truth)/np.array(truth_jet_energy)
 
         # get binning between 0 to 1
         response_binning = get_bins(0, 1, 20)
@@ -526,10 +610,10 @@ class ZJetsAnalysis:
         self.histograms["hist_response_truth"] = hist_response_truth
 
         # store jet energy at different scales for x-bins
-        median_em, sigma_em = calculate_sigma_iqr_in_x_bins(z_pt, response_em, truth_z_pt_bins)
-        median_lcw, sigma_lcw = calculate_sigma_iqr_in_x_bins(z_pt, response_lcw, truth_z_pt_bins)
-        median_ml, sigma_ml = calculate_sigma_iqr_in_x_bins(z_pt, response_ml, truth_z_pt_bins)
-        median_truth, sigma_truth = calculate_sigma_iqr_in_x_bins(z_pt, response_truth, truth_z_pt_bins)
+        median_em, sigma_em = calculate_sigma_iqr_in_x_bins(truth_jet_pt, response_em, truth_z_pt_bins)
+        median_lcw, sigma_lcw = calculate_sigma_iqr_in_x_bins(truth_jet_pt, response_lcw, truth_z_pt_bins)
+        median_ml, sigma_ml = calculate_sigma_iqr_in_x_bins(truth_jet_pt, response_ml, truth_z_pt_bins)
+        median_truth, sigma_truth = calculate_sigma_iqr_in_x_bins(truth_jet_pt, response_truth, truth_z_pt_bins)
         # make histograms
         hist_median_em = make_hist_from_bin_contents("hist_mean_em", "", truth_z_pt_bins, median_em)
         hist_median_lcw = make_hist_from_bin_contents("hist_mean_lcw", "", truth_z_pt_bins, median_lcw)

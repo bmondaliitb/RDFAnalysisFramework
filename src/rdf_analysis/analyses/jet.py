@@ -11,7 +11,7 @@ if __package__ in {None, ""}:
 from rdf_analysis.core import NtupleProcessor, awkward_to_numpy
 from rdf_analysis.stats import (
     calculate_gaussian_fit_params_from_arrays,
-    make_hist_from_bin_contents,
+    make_hist_from_bin_contents, calculate_sigma_iqr_in_x_bins,
 )
 
 DEBUG = False
@@ -45,24 +45,25 @@ def _jet_abs_eta_mask(jet_eta, jet_abs_eta_min, jet_abs_eta_max):
     return mask
 
 
-#def _default_x_bin_edges():
-#    return [
-#        20, 30, 40, 45, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
-#        160, 200, 250, 300, 350, 400, 450, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700,
-#        1800, 1900, 2000, 2100, 2300, 2500, 2700, 2900, 3200, 3900, 5000,
-#    ]
-
-def _default_x_bin_edges(): # for forward region (high pt jets)
+def _default_x_bin_edges():
     return [
-        20, 150, 200, 250, 300, 350, 400, 450, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1600,
-        1800, 2500, 4000
+        20, 30, 40, 45, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
+        160, 200, 250, 300, 350, 400, 450, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700,
+        1800, 1900, 2000, 2100, 2300, 2500, 2700, 2900, 3200, 3900, 5000,
     ]
+
+#def _default_x_bin_edges(): # for forward region (high pt jets)
+#    return [
+#        20, 150, 200, 250, 300, 350, 400, 450, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1600,
+#        1800, 2500, 4000
+#    ]
 
 
 def _cluster_e_ml_correct_branch(use_tower_cluster_e_ml_correct=USE_TOWER_CLUSTER_E_ML_CORRECT):
     if use_tower_cluster_e_ml_correct:
         return "cluster_e_ML_correct_tower"
-    return "cluster_e_ML_correct"
+    #return "cluster_e_ML_correct"
+    return "cluster_e_ML_inJet"
 
 
 def _collect_event_data(proc, use_tower_cluster_e_ml_correct=USE_TOWER_CLUSTER_E_ML_CORRECT):
@@ -72,12 +73,12 @@ def _collect_event_data(proc, use_tower_cluster_e_ml_correct=USE_TOWER_CLUSTER_E
         "jet_e_EM",
         "jet_pt_truth",
         "jet_e_truth",
-        "cluster_e_truth",
-        "cluster_e_EM",
-        "cluster_e_ML",
+        "cluster_e_truth_inJet",
+        "cluster_e_EM_inJet",
+        "cluster_e_ML_inJet",
         _cluster_e_ml_correct_branch(use_tower_cluster_e_ml_correct),
-        "cluster_e_LC",
-        "cluster_eta",
+        "cluster_e_LC_inJet",
+        "cluster_eta_inJet",
     ]
     return proc.iter_arrays(columns)
 
@@ -102,12 +103,12 @@ def _build_response_arrays(
         df_jet_e_EM = chunk["jet_e_EM"]
         df_jet_pt_truth = chunk["jet_pt_truth"]
         df_jet_e_truth = chunk["jet_e_truth"]
-        df_cluster_e_truth = chunk["cluster_e_truth"]
-        df_cluster_e_EM = chunk["cluster_e_EM"]
-        df_cluster_e_ML = chunk["cluster_e_ML"]
+        df_cluster_e_truth = chunk["cluster_e_truth_inJet"]
+        df_cluster_e_EM = chunk["cluster_e_EM_inJet"]
+        df_cluster_e_ML = chunk["cluster_e_ML_inJet"]
         df_cluster_e_ML_correct = chunk[cluster_e_ml_correct_branch]
-        df_cluster_e_LC = chunk["cluster_e_LC"]
-        df_cluster_eta = chunk["cluster_eta"]
+        df_cluster_e_LC = chunk["cluster_e_LC_inJet"]
+        df_cluster_eta = chunk["cluster_eta_inJet"]
 
         for event in range(len(df_jet_pt)):
             if event_counter % 10000 == 0:
@@ -214,9 +215,11 @@ def _fit_response_metrics(response_data, x_bin_edges, out_file):
         "em_jet_response_vs_truth_jet_energy": (jet_energy_dict["truth"], jet_response_dict["EM"]),
         "ml_jet_response_vs_truth_jet_energy": (jet_energy_dict["truth"], jet_response_dict["ML"]),
         "lc_jet_response_vs_truth_jet_energy": (jet_energy_dict["truth"], jet_response_dict["LC"]),
+        "truth_jet_response_vs_truth_jet_energy": (jet_energy_dict["truth"], jet_response_dict["truth"]),
         "em_jet_response_vs_truth_jet_pt": (jet_pt_dict["truth"], jet_response_dict["EM"]),
         "ml_jet_response_vs_truth_jet_pt": (jet_pt_dict["truth"], jet_response_dict["ML"]),
         "lc_jet_response_vs_truth_jet_pt": (jet_pt_dict["truth"], jet_response_dict["LC"]),
+        "truth_jet_response_vs_truth_jet_pt": (jet_pt_dict["truth"], jet_response_dict["truth"]),
         "em_jet_response_cluster_truth_vs_truth_jet_energy": (jet_energy_dict["truth"], jet_response_cluster_truth_dict["EM"]),
         "ml_jet_response_cluster_truth_vs_truth_jet_energy": (jet_energy_dict["truth"], jet_response_cluster_truth_dict["ML"]),
         "lc_jet_response_cluster_truth_vs_truth_jet_energy": (jet_energy_dict["truth"], jet_response_cluster_truth_dict["LC"]),
@@ -231,6 +234,7 @@ def _fit_response_metrics(response_data, x_bin_edges, out_file):
     metrics = {}
     for name, (x_values, y_values) in fit_specs.items():
         metrics[name] = calculate_gaussian_fit_params_from_arrays(x_values, y_values, x_bin_edges, out_file=out_file, y_name=name)
+        #metrics[name] = calculate_sigma_iqr_in_x_bins(x_values, y_values, x_bin_edges)
 
     return metrics
 
@@ -298,7 +302,7 @@ def parse_args():
         "--abs-eta-min",
         dest="abs_eta_min",
         type=float,
-        default=None,
+        default=0,
         help="Minimum jet |eta| to keep. Omit to leave the lower edge uncut.",
     )
     parser.add_argument(
@@ -306,7 +310,7 @@ def parse_args():
         "--abs-eta-max",
         dest="abs_eta_max",
         type=float,
-        default=None,
+        default=2.5,
         help="Maximum jet |eta| to keep, using an exclusive upper bound. Omit to leave the upper edge uncut.",
     )
     parser.add_argument(

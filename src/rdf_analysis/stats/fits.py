@@ -87,7 +87,8 @@ def calculate_gaussian_fit_params_from_arrays(x, y, x_bin_edges, out_file=None, 
             continue
 
         hname = f"h_fit_input_{y_name}_bin{i:03d}"
-        htitle = f"{y_name};{y_name};Events"
+        bin_range_label = f"{x_low:.1f} <= x < {x_high:.1f}"
+        htitle = f"{y_name}, {bin_range_label};{y_name};Events"
         htmp = ROOT.TH1D(hname, htitle, fit_hist_bins, y_low, y_high)
         htmp.SetDirectory(0)
         htmp.Sumw2()
@@ -136,6 +137,11 @@ def calculate_gaussian_fit_params_from_arrays(x, y, x_bin_edges, out_file=None, 
             fit.SetLineColor(ROOT.kRed + 1)
             fit.SetLineWidth(2)
             fit.Draw("SAME")
+
+            label = ROOT.TLatex()
+            label.SetNDC()
+            label.SetTextSize(0.035)
+            label.DrawLatex(0.15, 0.84, f"x bin: {bin_range_label}")
 
             leg = ROOT.TLegend(0.60, 0.75, 0.88, 0.88)
             leg.AddEntry(htmp, "Data", "lep")

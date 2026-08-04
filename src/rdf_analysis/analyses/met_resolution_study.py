@@ -165,7 +165,7 @@ class METResolutionStudy:
             self.event_counts["total"] += 1
 
             met_inputs = build_met_inputs(arrays, event)
-            if not met_inputs.has_consistent_size(require_jet_eta=True):
+            if not met_inputs.has_consistent_size():
                 continue
             self.event_counts["valid_met_inputs"] += 1
 

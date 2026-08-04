@@ -178,7 +178,7 @@ class METInputs:
     jets: METInputTerm
     soft_term: TransverseVector
 
-    def has_consistent_size(self, require_jet_eta: bool = False) -> bool:
+    def has_consistent_size(self ) -> bool:
         sizes_are_consistent = (
             self.electrons.has_consistent_size()
             and self.muons.has_consistent_size()
@@ -186,9 +186,7 @@ class METInputs:
             and np.isfinite(self.soft_term.x)
             and np.isfinite(self.soft_term.y)
         )
-        return sizes_are_consistent and (
-            not require_jet_eta or self.jets.eta is not None
-        )
+        return sizes_are_consistent
 
     def calculate_met(self) -> TransverseVector:
         """
@@ -210,6 +208,7 @@ class METInputs:
         eta_max: float,
     ) -> np.ndarray:
         abs_eta = np.abs(self.jets.eta)
+        # return indices where eta is non-zero and in forward region
         return np.flatnonzero(
             np.isfinite(abs_eta)
             & (abs_eta >= eta_min)
@@ -276,23 +275,40 @@ class ClusterCollection:
             and all(len(values) == self.count for values in self.energy.values())
         )
 
-    def away_from_jets(
-        self,
-        jet_eta: np.ndarray,
-        jet_phi: np.ndarray,
-        radius: float,
-    ) -> np.ndarray:
-        """Mask clusters with delta-R >= radius from every selected jet."""
+    def away_from_jets( self, jet_eta: np.ndarray, jet_phi: np.ndarray, radius: float,) -> np.ndarray:
+        """Return True for clusters at least `radius` away from every jet."""
+
         if self.count == 0:
             return np.zeros(0, dtype=bool)
 
-        delta_eta = self.eta[:, np.newaxis] - jet_eta[np.newaxis, :]
-        delta_phi = np.arctan2(
-            np.sin(self.phi[:, np.newaxis] - jet_phi[np.newaxis, :]),
-            np.cos(self.phi[:, np.newaxis] - jet_phi[np.newaxis, :]),
+        if len(jet_eta) == 0:
+            return np.ones(self.count, dtype=bool)
+
+        cluster_eta = self.eta[:, None]
+        cluster_phi = self.phi[:, None]
+
+        jets_eta = jet_eta[None, :]
+        jets_phi = jet_phi[None, :]
+
+        eta_difference = cluster_eta - jets_eta
+
+        raw_phi_difference = cluster_phi - jets_phi
+        phi_difference = np.arctan2(
+            np.sin(raw_phi_difference),
+            np.cos(raw_phi_difference),
         )
-        minimum_dr2 = np.min(delta_eta**2 + delta_phi**2, axis=1)
-        return minimum_dr2 >= radius**2
+
+        distance_squared = (
+                eta_difference ** 2
+                + phi_difference ** 2
+        )
+
+        closest_jet_distance_squared = np.min(
+            distance_squared,
+            axis=1,
+        )
+
+        return closest_jet_distance_squared >= radius ** 2
 
     def in_abs_eta_range(
         self,
@@ -547,42 +563,13 @@ def build_truth_met(
     phi_branch: Optional[str] = None,
 ) -> Optional[TruthMET]:
     """Read truth-MET magnitude from tu_pt and an optional true direction."""
-    pt_values = map_second_values(arrays, pt_branch, event)
-    index = METConfig.TRUTH_MET_INDEX
-
+    pt_values = awkward_to_numpy(arrays[pt_branch][event])
+    index = METConfig.TRUTH_MET_INDEX # use 0th index
     pt = float(pt_values[index]) * METConfig.GEV
-
-    phi = np.nan
-    if phi_branch is not None:
-        phi_values = map_second_values(arrays, phi_branch, event)
-        if len(phi_values) > index:
-            phi = float(phi_values[index])
+    phi_values = awkward_to_numpy(arrays[phi_branch][event])
+    phi = float(phi_values[index])
 
     return TruthMET(pt=pt, phi=phi if np.isfinite(phi) else np.nan)
-
-
-def map_second_values(
-    arrays: Mapping[str, object],
-    branch: str,
-    event: int,
-) -> np.ndarray:
-    """Return a map's numeric ``second`` values as a NumPy array."""
-    values = arrays[branch][event]
-    fields = list(getattr(values, "fields", []))
-    second_field = next(
-        (
-            field
-            for field in fields
-            if field == "second" or field.endswith(".second")
-        ),
-        None,
-    )
-    if second_field is not None:
-        values = values[second_field]
-    elif isinstance(values, Mapping) and "second" in values:
-        values = values["second"]
-    return awkward_to_numpy(values)
-
 
 def build_leptons(
     arrays: Mapping[str, object],

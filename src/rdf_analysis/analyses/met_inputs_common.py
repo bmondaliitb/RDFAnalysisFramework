@@ -57,6 +57,7 @@ class METConfig:
         "em": ("EM", "fCluster_rawE"),
         "lcw": ("LCW", "fCluster_calE"),
         "ml": ("ML", "fCluster_MLE"),
+        "ml_forward": ("ML forward", "cluster_e_ML_forward"),
         "truth": ("truth", "fCluster_truthE"),
     }
 
@@ -560,7 +561,7 @@ def build_truth_met(
     arrays: Mapping[str, object],
     event: int,
     pt_branch: str = METConfig.TRUTH_MET_PT_BRANCH,
-    phi_branch: Optional[str] = None,
+    phi_branch: str = METConfig.TRUTH_MET_PHI_BRANCH,
 ) -> Optional[TruthMET]:
     """Read truth-MET magnitude from tu_pt and an optional true direction."""
     pt_values = awkward_to_numpy(arrays[pt_branch][event])

@@ -91,6 +91,14 @@ class NtupleProcessor:
             return
 
         required_branches = self._required_branches(columns)
+        missing_branches = sorted(set(required_branches) - self.branch_names())
+        if missing_branches:
+            print(
+                "Input tree is missing required branches: {}".format(
+                    ", ".join(missing_branches)
+                )
+            )
+
         processed_events = 0
         step_size = min(self.step_size, self.n_events_to_process)
 

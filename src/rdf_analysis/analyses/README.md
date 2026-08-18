@@ -163,8 +163,8 @@ MET-input jet.
      (\cos\phi_c,\sin\phi_c).
    \]
 
-   Each cluster is counted once. The EM, LCW, ML, and truth energy-scale
-   versions are stored separately.
+   Each cluster is counted once. The EM, LCW, ML, ML-forward, and truth
+   energy-scale versions are stored separately.
 
 3. `clusters_away_SCALE`
 
@@ -198,6 +198,7 @@ MET-input jet.
 - `em`: `fCluster_rawE`;
 - `lcw`: `fCluster_calE`;
 - `ml`: `fCluster_MLE`;
+- `ml_forward`: `cluster_e_ML_forward`;
 - `truth`: `fCluster_truthE`.
 
 The all-cluster case is an inclusive diagnostic. It does not reproduce

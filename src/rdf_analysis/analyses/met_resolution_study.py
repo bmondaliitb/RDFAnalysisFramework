@@ -90,6 +90,7 @@ class METResolutionStudy:
         self.apply_z_mass_window = apply_z_mass_window
         self.available_branches = self.processor.branch_names()
         self.truth_pt_branch = METConfig.TRUTH_MET_PT_BRANCH
+        self.truth_phi_branch = METConfig.TRUTH_MET_PHI_BRANCH
         self.truth_direction_branches = METConfig.TRUTH_MET_PT_BRANCH
 
         self.variant_labels = self._build_variant_labels()
@@ -131,11 +132,15 @@ class METResolutionStudy:
             )
         return labels
 
+    """
+    List of tree branches to be read
+    """
     @property
     def columns(self) -> List[str]:
         branches = (
             list(METConfig.MET_INPUT_BRANCHES.values())
             + [self.truth_pt_branch]
+            + [self.truth_phi_branch]
             + list(METConfig.LEPTON_BRANCHES.values())
             + list(METConfig.CLUSTER_DIRECTION_BRANCHES.values())
             + [
@@ -148,8 +153,30 @@ class METResolutionStudy:
     def run(self) -> None:
         """Process events and construct resolution histograms."""
         print("Starting forward-jet MET resolution study...")
-        for arrays in self.processor.iter_arrays(self.columns):
-            self._process_chunk(arrays)
+        for index, input_file in enumerate(self.processor.input_file, start=1):
+            remaining_events = (
+                self.processor.n_events_to_process
+                - self.event_counts["total"]
+            )
+            if remaining_events <= 0:
+                break
+
+            print(
+                "[Info] Processing input file {}/{}: {}".format(
+                    index,
+                    len(self.processor.input_file),
+                    input_file,
+                ),
+                flush=True,
+            )
+            file_processor = NtupleProcessor(
+                input_file,
+                self.processor.tree_name,
+                remaining_events,
+                step_size=self.processor.step_size,
+            )
+            for arrays in file_processor.iter_arrays(self.columns):
+                self._process_chunk(arrays)
 
         for values in self.values.values():
             values.convert_to_numpy()
@@ -191,6 +218,7 @@ class METResolutionStudy:
                 arrays,
                 event,
                 pt_branch=self.truth_pt_branch,
+                phi_branch=self.truth_phi_branch,
             )
             if truth_met is None:
                 continue

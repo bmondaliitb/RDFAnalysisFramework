@@ -120,16 +120,6 @@ class METResolutionStudy:
                 "forward jets kept + non-overlapping forward clusters, "
                 "{} scale".format(scale_label)
             )
-            labels[f"clusters_away_{scale}"] = (
-                "forward jets removed + clusters away, {} scale".format(
-                    scale_label
-                )
-            )
-            labels[f"all_clusters_{scale}"] = (
-                "forward jets removed + all clusters, {} scale".format(
-                    scale_label
-                )
-            )
         return labels
 
     """
@@ -243,21 +233,12 @@ class METResolutionStudy:
             self.values["current"].append(
                 z_vector,
                 current_met,
-                truth_met,
             )
 
-            jets_removed_met = met_inputs.met_without_jets(
-                current_met,
-                forward_indices,
-            )
             away_mask = clusters.away_from_jets(
                 met_inputs.jets.eta[forward_indices],
                 met_inputs.jets.phi[forward_indices],
                 self.cluster_radius,
-            )
-            away_vectors = clusters.visible_vectors(away_mask)
-            all_vectors = clusters.visible_vectors(
-                np.ones(clusters.count, dtype=bool)
             )
             forward_nonoverlap_vectors = clusters.visible_vectors(
                 clusters.in_abs_eta_range(self.eta_min, self.eta_max)
@@ -268,17 +249,6 @@ class METResolutionStudy:
                 self.values[f"keep_jets_forward_clusters_{scale}"].append(
                     z_vector,
                     current_met - forward_nonoverlap_vectors[scale],
-                    truth_met,
-                )
-                self.values[f"clusters_away_{scale}"].append(
-                    z_vector,
-                    jets_removed_met - away_vectors[scale],
-                    truth_met,
-                )
-                self.values[f"all_clusters_{scale}"].append(
-                    z_vector,
-                    jets_removed_met - all_vectors[scale],
-                    truth_met,
                 )
 
     def _calculate_performance(self) -> None:
@@ -294,7 +264,6 @@ class METResolutionStudy:
     def _build_histograms(self) -> None:
         for name, values in self.values.items():
             self._build_variant_histograms(name, values)
-        self._build_improvement_histograms()
 
     def _build_variant_histograms(
         self,
@@ -307,10 +276,6 @@ class METResolutionStudy:
             & np.isfinite(values.pz)
             & np.isfinite(values.met)
         )
-        pz_residual_finite = (
-            np.isfinite(values.ptz) & np.isfinite(values.pz_residual)
-        )
-        met_error_finite = np.isfinite(values.met_error)
 
         self.histograms[f"h_met_{name}"] = make_histogram_1d(
             f"h_met_{name}",
@@ -328,29 +293,6 @@ class METResolutionStudy:
             Config.PZ_MAX,
             values.pz[kinematic_finite],
         )
-        self.histograms[f"h_met_error_{name}"] = make_histogram_1d(
-            f"h_met_error_{name}",
-            (
-                f"{label};"
-                "|#bf{p}_{T}^{miss}-#bf{p}_{T}^{miss,true}| [GeV];Events"
-            ),
-            Config.MET_BINS,
-            Config.MET_MIN,
-            Config.MET_MAX,
-            values.met_error[met_error_finite],
-        )
-        self.histograms[f"h_pz_residual_{name}"] = make_histogram_1d(
-            f"h_pz_residual_{name}",
-            (
-                f"{label};"
-                "(#bf{p}_{T}^{miss}-#bf{p}_{T}^{miss,true})"
-                "#upoint#hat{A}^{Z} [GeV];Events"
-            ),
-            Config.PZ_BINS,
-            Config.PZ_MIN,
-            Config.PZ_MAX,
-            values.pz_residual[pz_residual_finite],
-        )
         self.histograms[f"h2_pz_vs_pTZ_{name}"] = make_histogram_2d(
             f"h2_pz_vs_pTZ_{name}",
             f"{label};p_{{T}}^{{Z}} [GeV];P^{{Z}} [GeV]",
@@ -358,20 +300,6 @@ class METResolutionStudy:
             np.linspace(Config.PZ_MIN, Config.PZ_MAX, Config.PZ_BINS + 1),
             values.ptz[kinematic_finite],
             values.pz[kinematic_finite],
-        )
-        self.histograms[f"h2_pz_residual_vs_pTZ_{name}"] = (
-            make_histogram_2d(
-                f"h2_pz_residual_vs_pTZ_{name}",
-                (
-                    f"{label};p_{{T}}^{{Z}} [GeV];"
-                    "(#bf{p}_{T}^{miss}-#bf{p}_{T}^{miss,true})"
-                    "#upoint#hat{A}^{Z} [GeV]"
-                ),
-                self.ptz_bin_edges,
-                np.linspace(Config.PZ_MIN, Config.PZ_MAX, Config.PZ_BINS + 1),
-                values.ptz[pz_residual_finite],
-                values.pz_residual[pz_residual_finite],
-            )
         )
 
         performance = self.performance[name]
@@ -397,21 +325,6 @@ class METResolutionStudy:
                 contents,
             )
 
-    def _build_improvement_histograms(self) -> None:
-        current_resolution = self.performance["current"].resolution
-        for name, performance in self.performance.items():
-            if name == "current":
-                continue
-            histogram_name = f"h_resolution_improvement_{name}"
-            self.histograms[histogram_name] = make_hist_from_bin_contents(
-                histogram_name,
-                (
-                    f"{self.variant_labels[name]};p_{{T}}^{{Z}} [GeV];"
-                    "#sigma_{current}-#sigma_{scenario} [GeV]"
-                ),
-                self.ptz_bin_edges,
-                current_resolution - performance.resolution,
-            )
 
     def write_histograms(self) -> None:
         """Write all study histograms to the configured ROOT file."""

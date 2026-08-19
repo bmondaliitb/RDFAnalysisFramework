@@ -61,6 +61,17 @@ class METConfig:
         "truth": ("truth", "fCluster_truthE"),
     }
 
+    """
+    The units are really messed up; all cluster energies are in MeV; but ML_forward is in GeV
+    """
+    CLUSTER_SCALE_FACTORS = {
+        "em": GEV,
+        "lcw": GEV,
+        "ml": GEV,
+        "ml_forward": 1.0,
+        "truth": GEV
+    }
+
 
 @dataclass(frozen=True)
 class TransverseVector:
@@ -216,13 +227,6 @@ class METInputs:
             & (abs_eta < eta_max)
         )
 
-    def met_without_jets(
-        self,
-        current_met: TransverseVector,
-        indices: Sequence[int],
-    ) -> TransverseVector:
-        """Remove jets by adding their weighted visible vector back to MET."""
-        return current_met + self.jets.visible_vector(indices)
 
 
 @dataclass
@@ -356,35 +360,23 @@ class ObservableValues:
 
     ptz: List[float] = field(default_factory=list)
     pz: List[float] = field(default_factory=list)
-    pz_residual: List[float] = field(default_factory=list)
     met: List[float] = field(default_factory=list)
-    met_error: List[float] = field(default_factory=list)
 
     def append(
         self,
         z_vector: TransverseVector,
         met: TransverseVector,
-        truth_met: TruthMET,
     ) -> None:
         self.ptz.append(z_vector.pt)
         self.pz.append(met.dot(z_vector.unit()))
         self.met.append(met.pt)
-        truth_vector = truth_met.vector
-        if truth_vector is None:
-            self.pz_residual.append(np.nan)
-            self.met_error.append(np.nan)
-        else:
-            residual = met - truth_vector
-            self.pz_residual.append(residual.dot(z_vector.unit()))
-            self.met_error.append(residual.pt)
+
 
     def convert_to_numpy(self) -> None:
         for name in (
             "ptz",
             "pz",
-            "pz_residual",
             "met",
-            "met_error",
         ):
             setattr(
                 self,
@@ -595,7 +587,7 @@ def build_clusters(
         eta=awkward_to_numpy(arrays[direction["eta"]][event]),
         phi=awkward_to_numpy(arrays[direction["phi"]][event]),
         energy={
-            scale: awkward_to_numpy(arrays[branch][event]) * METConfig.GEV
+            scale: awkward_to_numpy(arrays[branch][event]) * METConfig.CLUSTER_SCALE_FACTORS[scale] # applying correct unit (unnecessary complication)
             for scale, (_, branch) in METConfig.CLUSTER_SCALES.items()
         },
     )

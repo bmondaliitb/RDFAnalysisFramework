@@ -90,7 +90,14 @@ The selected channel is \(Z\rightarrow\mu\mu\). By default,
 |m_{\mu\mu}-91.1876~\mathrm{GeV}| < 20~\mathrm{GeV},
 \]
 
-and a forward MET-input jet satisfies
+and the diagnostic tail rejection is
+
+\[
+|P^Z_{\mathrm{current}}| < 20~\mathrm{GeV}.
+\]
+
+Because this constraint selects on the measured MET, remove it for an
+unbiased detector-resolution measurement. A forward MET-input jet satisfies
 
 \[
 2.5 \leq |\eta_\mathrm{jet}| < 4.9.
@@ -113,13 +120,11 @@ C^{Z}
               {\langle p_\mathrm{T}^{Z}\rangle}.
 \]
 
-The truth-MET magnitude and azimuth are read from the `second` values of the
-`tu_pt` and `tu_phi` map branches, respectively, using entry zero. Flattened
-`tu_pt/tu_pt.second` and `tu_phi/tu_phi.second` branches are also accepted for
-compatibility. If `tu_phi` is absent, the direction is derived from
-`fMETTruthPt` and `fMETTruthPhi` when both truth-particle branches are
-available. No reconstructed direction is substituted for a missing truth
-direction.
+The truth-MET reference is the vector sum of the `Int` and `IntMuons` entries
+(indices 0 and 1 in the lexicographically ordered `std::map`) from the `tu_pt`
+and `tu_phi` map branches. Flattened `tu_pt/tu_pt.second` and
+`tu_phi/tu_phi.second` branches are also accepted for compatibility. No
+reconstructed direction is substituted for an invalid truth direction.
 
 The response-corrected \(Z\)-balance resolution is
 
@@ -239,12 +244,10 @@ so a positive value means improved resolution.
 Additional options:
 
 - `--input-dir`: recursively find ROOT inputs;
-- `--nEvents`: process only the requested number of events;
-- `--eta-min`, `--eta-max`: configure the forward region;
-- `--cluster-radius`: configure the clusters-away separation;
-- `--ptz-bins`: override the performance \(p_\mathrm{T}^{Z}\) bin edges with
-  a comma-separated list in GeV;
-- `--no-z-window`: disable the dilepton mass selection.
+- `--nEvents`: process only the requested number of events.
+
+Physics selections and histogram binning are configured through the `Config`
+class in the corresponding W or Z study script.
 
 The resolution study additionally requires the `tu_pt` map. Momentum values
 are expected in MeV and azimuthal values in radians. Truth-vector residuals

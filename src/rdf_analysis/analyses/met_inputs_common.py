@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence
 
 import numpy as np
-import ROOT
 
 from rdf_analysis.core import awkward_to_numpy
 
@@ -12,6 +11,8 @@ from rdf_analysis.core import awkward_to_numpy
 class METConfig:
     """Branch names and units shared by both MET analyses."""
 
+    # All vector components and pT values are converted from the ntuple's MeV
+    # convention to GeV at the point where the corresponding object is built.
     GEV = 0.001
 
     MET_INPUT_BRANCHES = {
@@ -40,7 +41,18 @@ class METConfig:
         "pt": "fMETTruthPt",
         "phi": "fMETTruthPhi",
     }
-    TRUTH_MET_INDEX = 0
+    # The flattened std::map values follow the maps' lexicographic key order.
+    TRUTH_MET_COMPONENT_INDICES = {
+        "Int": 0,
+        "IntMuons": 1,
+        "IntOut": 2,
+        "NonInt": 3,
+    }
+    # Select the truth-MET component used as the resolution reference.  The
+    # flattened vector follows TRUTH_MET_COMPONENT_INDICES above; changing this
+    # tuple changes the physics reference without changing event processing.
+    #TRUTH_MET_REFERENCE_COMPONENTS = ("Int", "IntMuons")
+    TRUTH_MET_REFERENCE_COMPONENTS = ("NonInt",)
 
     LEPTON_BRANCHES = {
         "pt": "mu_pt",
@@ -92,6 +104,8 @@ class TransverseVector:
         return float(self.x * other.x + self.y * other.y)
 
     def unit(self) -> "TransverseVector":
+        # A zero/invalid vector has no direction; callers should reject the
+        # resulting NaNs before using it for a projection.
         if not np.isfinite(self.pt) or self.pt == 0.0:
             return TransverseVector(np.nan, np.nan)
         return TransverseVector(self.x / self.pt, self.y / self.pt)
@@ -207,6 +221,8 @@ class METInputs:
         met_softtrk_mpx/mpy already carry the missing-momentum sign:
           MET = -(electrons + muons + jets) + soft MET.
         """
+        # Each stored hard-object term is visible momentum; MET uses its
+        # negative, while the soft branch already contains the MET sign.
         hard_term = (
             self.electrons.visible_vector()
             + self.muons.visible_vector()
@@ -220,7 +236,8 @@ class METInputs:
         eta_max: float,
     ) -> np.ndarray:
         abs_eta = np.abs(self.jets.eta)
-        # return indices where eta is non-zero and in forward region
+        # Keep the original jet indices so the same subset can be summed with
+        # its stored weights later (e.g. when removing forward jets).
         return np.flatnonzero(
             np.isfinite(abs_eta)
             & (abs_eta >= eta_min)
@@ -243,6 +260,8 @@ class LeptonCollection:
 
     @property
     def z_vector(self) -> TransverseVector:
+        # The Z candidate is reconstructed from the first two muons, matching
+        # the selection convention in met_resolution_study_zmumu.py.
         pt = self.pt[:2]
         phi = self.phi[:2]
         return TransverseVector(
@@ -251,7 +270,20 @@ class LeptonCollection:
         )
 
     @property
+    def z_eta(self) -> float:
+        """Pseudorapidity of the dimuon momentum, using massless muons."""
+        if self.count < 2:
+            return np.nan
+        z_pt = self.z_vector.pt
+        z_pz = float(np.sum(self.pt[:2] * np.sinh(self.eta[:2])))
+        if not np.isfinite(z_pt) or not np.isfinite(z_pz) or z_pt == 0.0:
+            return np.nan
+        return float(np.arcsinh(z_pz / z_pt))
+
+    @property
     def dilepton_mass(self) -> float:
+        # Use the massless-lepton invariant-mass expression; Δφ is wrapped to
+        # avoid a discontinuity at ±π.
         if self.count < 2:
             return np.nan
         delta_eta = self.eta[0] - self.eta[1]
@@ -308,6 +340,8 @@ class ClusterCollection:
                 + phi_difference ** 2
         )
 
+        # A cluster is retained only when its closest forward jet is outside
+        # the overlap cone; this mask is later combined with the η acceptance.
         closest_jet_distance_squared = np.min(
             distance_squared,
             axis=1,
@@ -335,6 +369,8 @@ class ClusterCollection:
             raise ValueError("Cluster mask has the wrong size")
 
         vectors = {}
+        # Convert cluster energy to transverse momentum with pT = E/cosh(η),
+        # then sum each calibration scale independently.
         for scale, energy in self.energy.items():
             valid = (
                 mask
@@ -366,9 +402,12 @@ class ObservableValues:
         self,
         z_vector: TransverseVector,
         met: TransverseVector,
+        projection_met: Optional[TransverseVector] = None,
     ) -> None:
+        """Store MET kinematics and a possibly truth-subtracted projection."""
         self.ptz.append(z_vector.pt)
-        self.pz.append(met.dot(z_vector.unit()))
+        projected = met if projection_met is None else projection_met
+        self.pz.append(projected.dot(z_vector.unit()))
         self.met.append(met.pt)
 
 
@@ -458,47 +497,6 @@ def calculate_binned_performance(
     )
 
 
-def make_histogram_1d(
-    name: str,
-    title: str,
-    bins: int,
-    low: float,
-    high: float,
-    values: np.ndarray,
-):
-    """Construct a ROOT TH1D from finite values."""
-    histogram = ROOT.TH1D(name, title, bins, low, high)
-    for value in values:
-        if np.isfinite(value):
-            histogram.Fill(float(value))
-    return histogram
-
-
-def make_histogram_2d(
-    name: str,
-    title: str,
-    x_edges: Iterable[float],
-    y_edges: Iterable[float],
-    x_values: np.ndarray,
-    y_values: np.ndarray,
-):
-    """Construct a ROOT TH2D from finite paired values."""
-    x_edges = np.asarray(x_edges, dtype=np.float64)
-    y_edges = np.asarray(y_edges, dtype=np.float64)
-    histogram = ROOT.TH2D(
-        name,
-        title,
-        len(x_edges) - 1,
-        x_edges,
-        len(y_edges) - 1,
-        y_edges,
-    )
-    finite = np.isfinite(x_values) & np.isfinite(y_values)
-    for x_value, y_value in zip(x_values[finite], y_values[finite]):
-        histogram.Fill(float(x_value), float(y_value))
-    return histogram
-
-
 def build_met_inputs(
     arrays: Mapping[str, object],
     event: int,
@@ -555,14 +553,23 @@ def build_truth_met(
     pt_branch: str = METConfig.TRUTH_MET_PT_BRANCH,
     phi_branch: str = METConfig.TRUTH_MET_PHI_BRANCH,
 ) -> Optional[TruthMET]:
-    """Read truth-MET magnitude from tu_pt and an optional true direction."""
+    """Build the Int + IntMuons truth-MET reference vector."""
     pt_values = awkward_to_numpy(arrays[pt_branch][event])
-    index = METConfig.TRUTH_MET_INDEX # use 0th index
-    pt = float(pt_values[index]) * METConfig.GEV
     phi_values = awkward_to_numpy(arrays[phi_branch][event])
-    phi = float(phi_values[index])
 
-    return TruthMET(pt=pt, phi=phi if np.isfinite(phi) else np.nan)
+    reference = TransverseVector.zero()
+    for component in METConfig.TRUTH_MET_REFERENCE_COMPONENTS:
+        index = METConfig.TRUTH_MET_COMPONENT_INDICES[component]
+        pt = float(pt_values[index]) * METConfig.GEV
+        phi = float(phi_values[index])
+        if not np.isfinite(pt) or not np.isfinite(phi):
+            return None
+        reference += TransverseVector(
+            pt * float(np.cos(phi)),
+            pt * float(np.sin(phi)),
+        )
+
+    return TruthMET(pt=reference.pt, phi=reference.phi)
 
 def build_leptons(
     arrays: Mapping[str, object],

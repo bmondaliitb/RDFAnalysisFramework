@@ -36,7 +36,7 @@ class Config:
     SECOND_JET_REF_PT_FRACTION_MAX = 0.10
 
     # Matching
-    TRUTH_MATCH_DR = 0.4
+    TRUTH_MATCH_DR = 0.2
     
     # Units
     GEV = 0.001
@@ -375,10 +375,10 @@ class ZJetsAnalysis:
                 ### n Muons > 1
                 if not leptons.count>1: continue
                 self.event_counts["nmu_gt_1"] += 1
-                if not len(reco_jets.to_array) > 0: continue
+                if not len(reco_jets.to_array) > 1: continue
                 self.event_counts["has_jets"] += 1
                 dilep_mass = dilepton_mass(leptons.pt, leptons.eta, leptons.phi)
-                if not ((Config.Z_MASS - 20)< dilep_mass and (dilep_mass < (Config.Z_MASS + 20)) ): continue
+                #if not ((Config.Z_MASS - 20)< dilep_mass and (dilep_mass < (Config.Z_MASS + 20)) ): continue
                 self.event_counts["z_mass_window"] += 1
 
                 # delta phi (leading jet and Z) > 2.8
@@ -391,8 +391,9 @@ class ZJetsAnalysis:
                 pt_ref_list.append(pt_ref)
 
                 # subleading jet pt cut
-                if len(reco_jets.to_array)>1:
-                    if not (reco_jets.subleading_jet.pt < max(12, pt_ref*Config.SECOND_JET_REF_PT_FRACTION_MAX)): continue
+                #if len(reco_jets.to_array)>1:
+                #    if not (reco_jets.subleading_jet.pt < max(12, pt_ref*Config.SECOND_JET_REF_PT_FRACTION_MAX)): continue
+                if(reco_jets.subleading_jet.pt > 0.1*reco_jets.leading_jet.pt): continue
                 self.event_counts["subleading_jet_cut"] += 1
                 # is leading jet truth matched?
                 is_leading_jet_truth_matched = reco_jets.is_leading_jet_truth_matched(truth_jets)

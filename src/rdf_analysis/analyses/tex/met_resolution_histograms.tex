@@ -1,0 +1,276 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+
+\newcommand{\ptmiss}{p_{\mathrm{T}}^{\mathrm{miss}}}
+\newcommand{\vptmiss}{\boldsymbol{p}_{\mathrm{T}}^{\mathrm{miss}}}
+\newcommand{\vpt}{\boldsymbol{p}_{\mathrm{T}}}
+\newcommand{\vmet}[1]{\boldsymbol{p}_{\mathrm{T},#1}^{\mathrm{miss}}}
+\newcommand{\avgmu}{\langle\mu\rangle}
+
+\title{Histogram calculations in \texttt{met\_resolution\_study.py} and
+\texttt{met\_resolution\_study\_wmunu.py}}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+
+The two programs use the same histogram calculations.  Their principal
+difference is the boson reference vector.  In
+\texttt{met\_resolution\_study.py}, it is the vector sum of the first two
+reconstructed muons,
+\begin{equation}
+  \vpt^{\,Z}=\vpt^{\,\mu_1}+\vpt^{\,\mu_2}.
+\end{equation}
+Events must contain at least two muons.  If the mass-window option is enabled,
+they must also satisfy
+\begin{equation}
+  |m_{\mu\mu}-91.1876~\mathrm{GeV}|<20~\mathrm{GeV}.
+\end{equation}
+In \texttt{met\_resolution\_study\_wmunu.py}, events need at least one
+reconstructed muon, but the reference vector is instead read from the truth
+boson branches:
+\begin{equation}
+  \vpt^{\,B}
+  =p_{\mathrm{T}}^{B}(\cos\phi_B,\sin\phi_B),
+  \qquad
+  p_{\mathrm{T}}^{B}=10^{-3}\,\texttt{tboson\_pt}.
+\end{equation}
+Here and below, $B$ denotes the reference boson; $B=Z$ in the first program,
+whereas in the $W\to\mu\nu$ program it is the truth boson.  The histogram
+names and titles in the code still use the symbols \texttt{pTZ}, $p_T^Z$ and
+$P^Z$ for both programs.
+
+All momenta used in the calculations are in GeV.  Input momenta and cluster
+energies stored in MeV are multiplied by $10^{-3}$.  Histograms are filled
+with one entry per accepted event and no event weights.
+
+\section{MET definitions}
+
+For each hard-object collection $a\in\{e,\mu,\mathrm{jet}\}$, the stored MET
+inputs define the visible vector
+\begin{equation}
+  \boldsymbol{p}_{\mathrm{T},\mathrm{vis}}^{\,a}
+  =\sum_{i\in a}w_i p_{\mathrm{T},i}
+    (\cos\phi_i,\sin\phi_i),
+\end{equation}
+where $w_i$ is the corresponding \texttt{met\_input\_*\_weight}.  The
+``current'' MET is reconstructed as
+\begin{equation}
+  \vmet{\mathrm{current}}
+  =-\left(\boldsymbol{p}_{\mathrm{T},\mathrm{vis}}^{\,e}
+          +\boldsymbol{p}_{\mathrm{T},\mathrm{vis}}^{\,\mu}
+          +\boldsymbol{p}_{\mathrm{T},\mathrm{vis}}^{\,\mathrm{jet}}\right)
+   +\vmet{\mathrm{soft}},
+  \label{eq:current-met}
+\end{equation}
+because the stored soft components already have the missing-momentum sign.
+
+The truth-MET reference is the vector sum of the \texttt{Int} and
+\texttt{IntMuons} terms.  These are elements 0 and 1 of the flattened
+\texttt{tu\_pt.second} and \texttt{tu\_phi.second} maps, whose keys are in
+lexicographic order.  For each component
+$c\in\{\texttt{Int},\texttt{IntMuons}\}$, the stored magnitude and azimuth
+first define
+\begin{equation}
+  \vmet{c}=p_{\mathrm{T},c}^{\mathrm{miss}}
+    (\cos\phi_c,\sin\phi_c),
+\end{equation}
+and the reference is
+\begin{equation}
+  \vmet{\mathrm{truth}}
+  =\vmet{\mathrm{Int}}+\vmet{\mathrm{IntMuons}}.
+  \label{eq:truth-reference}
+\end{equation}
+Thus the two vectors are added in Cartesian components; their magnitudes are
+not added directly.
+
+The alternative variants retain the forward MET-input jets and add
+non-overlapping forward clusters to the visible momentum.  A cluster is used
+when
+\begin{equation}
+  2.5\leq |\eta_c|<4.9,
+  \qquad
+  \Delta R(c,j)\geq 0.4
+\end{equation}
+for every forward MET-input jet $j$.  If there are no such jets, every cluster
+passing the $|\eta|$ requirement passes the overlap condition.  At energy
+scale $s\in\{\mathrm{EM},\mathrm{LCW},\mathrm{ML},\mathrm{truth}\}$, the
+selected cluster vector is
+\begin{equation}
+  \boldsymbol{p}_{\mathrm{T},\mathrm{vis}}^{\,\mathrm{clus},s}
+  =\sum_{c\in\mathrm{selected}}
+   \frac{E_c^s}{\cosh\eta_c}(\cos\phi_c,\sin\phi_c),
+\end{equation}
+and the corresponding MET is
+\begin{equation}
+  \vmet{s}
+  =\vmet{\mathrm{current}}
+   -\boldsymbol{p}_{\mathrm{T},\mathrm{vis}}^{\,\mathrm{clus},s}.
+  \label{eq:cluster-met}
+\end{equation}
+The programs therefore calculate histograms for three classes of variant:
+\begin{center}
+  \texttt{current}, \qquad
+  \texttt{truth\_met}, \qquad
+  \texttt{keep\_jets\_forward\_clusters\_}\(s\).
+\end{center}
+Despite the study name, an event is not required to contain a forward jet:
+that selection is commented out in both files.
+
+\section{Event-level observables}
+
+Let
+\begin{equation}
+  \widehat{\boldsymbol{b}}
+  =\frac{\vpt^{\,B}}{p_{\mathrm{T}}^B}
+\end{equation}
+be the unit vector along the reference boson.  For every MET variant $v$, the
+three stored event-level quantities are
+\begin{align}
+  p_{\mathrm{T}}^B &= |\vpt^{\,B}|,\\
+  P^B_v &= \vmet{v}\mathbin{\cdot}\widehat{\boldsymbol{b}},
+  \label{eq:projection}\\
+  p_{\mathrm{T},v}^{\mathrm{miss}} &= |\vmet{v}|.
+\end{align}
+Thus $P^B$ is the component of MET parallel to the boson direction.  In
+particular, it is \emph{not} the conventional hadronic recoil projection with
+an extra minus sign.
+
+Only finite values of all three quantities are used in the directly filled
+one- and two-dimensional histograms.  The one-dimensional MET histogram is
+\begin{equation}
+  N_k^{\mathrm{MET}}
+  =\sum_e \mathbf{1}\!\left[
+    p_{\mathrm{T},v,e}^{\mathrm{miss}}\in I_k\right],
+\end{equation}
+with 120 uniform bins on $[0,300]$ GeV.  The projected-MET histogram is
+\begin{equation}
+  N_k^{P}
+  =\sum_e \mathbf{1}\!\left[P^B_{v,e}\in J_k\right],
+\end{equation}
+with 120 uniform bins on $[-120,120]$ GeV.  These are named
+\texttt{h\_met\_\(v\)} and \texttt{h\_pz\_\(v\)}, respectively.
+
+The histogram \texttt{h2\_pz\_vs\_pTZ\_\(v\)} counts events in two
+dimensions:
+\begin{equation}
+  N_{ij}=\sum_e \mathbf{1}\!\left[p_{\mathrm{T},e}^{B}\in I_i\right]
+                    \mathbf{1}\!\left[P^B_{v,e}\in J_j\right].
+\end{equation}
+Its $P^B$ axis has the same 120 uniform bins on $[-120,120]$ GeV.  Its boson
+$p_T$ edges are, by default,
+\begin{equation}
+  (0,10,20,30,40,50,60,70,80,90,100,120,160,200,260)~\mathrm{GeV}.
+  \label{eq:pt-bins}
+\end{equation}
+ROOT handles values outside the displayed ranges as underflow or overflow
+when these directly filled histograms are made.
+
+\section{Binned response and resolution histograms}
+
+For each boson-$p_T$ bin $i$, let $S_i$ be the accepted events in that bin and
+$n_i=|S_i|$.  Every bin is left-closed and right-open,
+$p_{\mathrm{T}}^B\in[l_i,h_i)$, except the final bin, which includes its upper
+edge.  The following quantities are calculated:
+\begin{align}
+  \overline{p_{\mathrm{T}}^B}_i
+    &=\frac{1}{n_i}\sum_{e\in S_i}p_{\mathrm{T},e}^B,\\
+  \overline{P^B}_{v,i}
+    &=\frac{1}{n_i}\sum_{e\in S_i}P^B_{v,e},\\
+  C^B_{v,i}
+    &=1+\frac{\overline{P^B}_{v,i}}
+                   {\overline{p_{\mathrm{T}}^B}_i},
+  \label{eq:response}\\
+  \sigma^{\mathrm{raw}}_{v,i}
+    &=\sqrt{\frac{1}{n_i}\sum_{e\in S_i}
+       \left(P^B_{v,e}-\overline{P^B}_{v,i}\right)^2},
+  \label{eq:raw-resolution}\\
+  \sigma_{v,i}
+    &=\frac{\sigma^{\mathrm{raw}}_{v,i}}{C^B_{v,i}}.
+  \label{eq:corrected-resolution}
+\end{align}
+Equation~\eqref{eq:raw-resolution} is the population standard deviation
+(NumPy's default \texttt{std}, i.e.\ \(\mathrm{ddof}=0\)), although the ROOT
+title calls it ``RMS$(P^Z)$''.  It is the RMS of deviations from the mean, not
+$\sqrt{\langle(P^B)^2\rangle}$.  The response-corrected resolution in
+Eq.~\eqref{eq:corrected-resolution} is stored with units of GeV.
+
+These arrays become the bin contents of the following ROOT \texttt{TH1D}
+objects:
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Histogram & Content of boson-$p_T$ bin $i$ \\
+\midrule
+\texttt{h\_entries\_vs\_pTZ\_\(v\)} & $n_i$ \\
+\texttt{h\_mean\_pz\_vs\_pTZ\_\(v\)} & $\overline{P^B}_{v,i}$ \\
+\texttt{h\_response\_vs\_pTZ\_\(v\)} & $C^B_{v,i}$ \\
+\texttt{h\_raw\_resolution\_vs\_pTZ\_\(v\)} & $\sigma^{\mathrm{raw}}_{v,i}$ \\
+\texttt{h\_resolution\_vs\_pTZ\_\(v\)} & $\sigma_{v,i}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+Empty bins, or bins for which a required division is undefined, are first
+represented by \texttt{NaN} and then written to the ROOT histogram with bin
+content zero.  These derived histograms are made by setting bin contents
+directly; the code does not assign statistical bin errors.
+
+There is also
+\texttt{h\_mean\_pz\_vs\_pTZ\_jet\_inclusive}.  It contains
+$\overline{P^B}_{\mathrm{current},i}$ for current MET.  Its event sample is
+filled before requiring valid truth MET and a consistent cluster collection,
+whereas all per-variant histograms are filled only after those requirements.
+Consequently this histogram can contain more events.  ``Jet inclusive'' does
+not introduce a separate jet requirement.
+
+\section{Pile-up-dependent MET residual RMS}
+
+For component $a\in\{x,y\}$ and variant $v$, the event residual is
+\begin{equation}
+  r_{a,v}=p^{\mathrm{miss}}_{a,v}
+          -p^{\mathrm{miss,true}}_a.
+\end{equation}
+In a pile-up bin $S_i^{q}$ of either $q=\avgmu$ or $q=N_{\mathrm{PV}}$, the
+program calculates
+\begin{equation}
+  \operatorname{RMS}_{i}(r_{a,v})
+  =\sqrt{\frac{1}{|S_i^q|}\sum_{e\in S_i^q}r_{a,v,e}^{2}}.
+  \label{eq:residual-rms}
+\end{equation}
+Unlike Eq.~\eqref{eq:raw-resolution}, Eq.~\eqref{eq:residual-rms} is an RMS
+about zero and does not subtract the mean residual.  The default bin edges are
+\begin{align}
+  \avgmu &: 0,5,10,\ldots,80,\\
+  N_{\mathrm{PV}} &: 0,2,4,\ldots,50.
+\end{align}
+The bin-edge convention is again $[l_i,h_i)$ with the final upper edge
+included.  The resulting histograms are named
+\texttt{h\_rms\_met\_p\(a\)\_residual\_vs\_\(q\)\_\(v\)}.  Empty-bin
+values are written as zero and no bin errors are assigned.
+
+\section{Implementation details relevant to interpretation}
+
+The per-variant sample requires consistent MET-input arrays, the relevant
+muon multiplicity and valid boson vector, finite truth-MET direction, and a
+consistent cluster collection.  A forward jet is not required.  The values of
+$\avgmu$ and $N_{\mathrm{PV}}$ are appended once per accepted event and align
+with every variant's residual array.
+
+All entries are unweighted at histogram level.  The only weights in the
+calculation are the per-object MET-input weights in
+Eq.~\eqref{eq:current-met}.  The cluster sums in
+Eq.~\eqref{eq:cluster-met}, the sample means, standard deviations, residual
+RMS values, and histogram fills use no additional weights.
+
+\end{document}

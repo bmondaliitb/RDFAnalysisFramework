@@ -2,9 +2,6 @@ import awkward as ak
 import numpy as np
 import uproot
 
-from rdf_analysis.stats.fits import calculate_gaussian_fit_params_from_arrays, calculate_mean_sigma_in_x_bins
-
-
 def awkward_to_numpy(values, dtype=np.float64):
     return ak.to_numpy(values).astype(dtype, copy=False)
 
@@ -69,8 +66,8 @@ class NtupleProcessor:
     def _required_branches(self, columns):
         return sorted(set(columns))
 
-    def _select_events(self, raw_arrays):
-        return raw_arrays
+    #def _select_events(self, raw_arrays):
+    #    return raw_arrays
 
     def iter_arrays(self, columns):
         """
@@ -119,7 +116,7 @@ class NtupleProcessor:
                 chunk_events = remaining_events
 
             processed_events += chunk_events
-            raw_arrays = self._select_events(raw_arrays)
+            #raw_arrays = self._select_events(raw_arrays)
             if not raw_arrays or len(next(iter(raw_arrays.values()))) == 0:
                 continue
 

@@ -519,6 +519,52 @@ class METResolutionStudyBase(ABC):
                     edges,
                     iqr_sigma,
                 )
+                if variable == "nPrimVtx" and component == "x":
+                    values = self.values[name]
+                    median_pz, _ = calculate_iqr_gaussian_sigma_in_x_bins(
+                        self.pileup_values[variable], values.pz, edges,
+                    )
+                    mean_ptz = calculate_binned_mean(
+                        self.pileup_values[variable], values.ptz, edges,
+                    )
+                    # Calculate C^Z in the same vertex bins as the width.
+                    response = np.full_like(median_pz, np.nan)
+                    valid = (
+                        np.isfinite(median_pz)
+                        & np.isfinite(mean_ptz)
+                        & (mean_ptz != 0.0)
+                    )
+                    response[valid] = 1.0 + median_pz[valid] / mean_ptz[valid]
+                    histogram_name = f"h_response_vs_nPrimVtx_{name}"
+                    self.histograms[histogram_name] = make_hist_from_bin_contents(
+                        histogram_name,
+                        f"{self.variant_labels[name]};{axis_title};C^{{Z}}",
+                        edges,
+                        response,
+                    )
+                    corrected_resolution = np.full_like(iqr_sigma, np.nan)
+                    np.divide(
+                        iqr_sigma,
+                        response,
+                        out=corrected_resolution,
+                        where=(
+                            np.isfinite(iqr_sigma)
+                            & np.isfinite(response)
+                            & (response != 0.0)
+                        ),
+                    )
+                    histogram_name = (
+                        f"h_iqr_met_px_residual_over_cz_vs_nPrimVtx_{name}"
+                    )
+                    self.histograms[histogram_name] = make_hist_from_bin_contents(
+                        histogram_name,
+                        (
+                            f"{self.variant_labels[name]};{axis_title};"
+                            "#sigma_{IQR}(p_{x}^{miss}-p_{x}^{miss,true})/C^{Z} [GeV]"
+                        ),
+                        edges,
+                        corrected_resolution,
+                    )
 
     def _build_variant_histograms(
         self,
@@ -575,7 +621,29 @@ class METResolutionStudyBase(ABC):
         )
 
         performance = self.performance[name]
+        # C^Z is the existing per-bin response; sigma_IQR = (Q84 - Q16) / 2.
+        _, iqr_sigma_px = calculate_iqr_gaussian_sigma_in_x_bins(
+            values.ptz,
+            self.met_residuals[name]["x"],
+            self.ptz_bin_edges,
+        )
+        corrected_px_resolution = np.full_like(iqr_sigma_px, np.nan)
+        valid_response = (
+            np.isfinite(iqr_sigma_px)
+            & np.isfinite(performance.response)
+            & (performance.response != 0.0)
+        )
+        np.divide(
+            iqr_sigma_px,
+            performance.response,
+            out=corrected_px_resolution,
+            where=valid_response,
+        )
         quantities = {
+            "iqr_met_px_residual_over_cz": (
+                "#sigma_{IQR}(p_{x}^{miss}-p_{x}^{miss,true})/C^{Z} [GeV]",
+                corrected_px_resolution,
+            ),
             "entries": ("Events", performance.entries),
             "mean_pz": (
                 "median(P_{||}^{reco-truth}) [GeV]",

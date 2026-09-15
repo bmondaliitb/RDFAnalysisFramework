@@ -171,16 +171,9 @@ class METInputTerm:
             sizes.append(len(self.eta))
         return len(set(sizes)) == 1
 
-    def visible_vector(
-        self,
-        indices: Optional[Sequence[int]] = None,
-    ) -> TransverseVector:
+    def visible_vector(self, indices: Optional[Sequence[int]] = None,) -> TransverseVector:
         """Return sum_i weight_i * pT_i for this term."""
-        selected = (
-            np.arange(self.count, dtype=np.int64)
-            if indices is None
-            else np.asarray(indices, dtype=np.int64)
-        )
+        selected = (np.arange(self.count, dtype=np.int64) if indices is None else np.asarray(indices, dtype=np.int64))
         pt = self.pt[selected]
         phi = self.phi[selected]
         weight = self.weight[selected]
@@ -398,12 +391,7 @@ class ObservableValues:
     pz: List[float] = field(default_factory=list)
     met: List[float] = field(default_factory=list)
 
-    def append(
-        self,
-        z_vector: TransverseVector,
-        met: TransverseVector,
-        projection_met: Optional[TransverseVector] = None,
-    ) -> None:
+    def append(self, z_vector: TransverseVector, met: TransverseVector, projection_met: Optional[TransverseVector] = None,) -> None:
         """Store MET kinematics and a possibly truth-subtracted projection."""
         self.ptz.append(z_vector.pt)
         projected = met if projection_met is None else projection_met
@@ -412,16 +400,8 @@ class ObservableValues:
 
 
     def convert_to_numpy(self) -> None:
-        for name in (
-            "ptz",
-            "pz",
-            "met",
-        ):
-            setattr(
-                self,
-                name,
-                np.asarray(getattr(self, name), dtype=np.float64),
-            )
+        for name in ("ptz", "pz", "met",):
+            setattr(self, name, np.asarray(getattr(self, name), dtype=np.float64),)
 
 
 @dataclass
@@ -440,11 +420,7 @@ def wrap_delta_phi(delta_phi: float) -> float:
     return float(np.arctan2(np.sin(delta_phi), np.cos(delta_phi)))
 
 
-def calculate_binned_performance(
-    ptz: np.ndarray,
-    pz: np.ndarray,
-    bin_edges: Iterable[float],
-) -> BinnedPerformance:
+def calculate_binned_performance(ptz: np.ndarray, pz: np.ndarray, bin_edges: Iterable[float],) -> BinnedPerformance:
     """Calculate Z-balance performance versus pTZ."""
     ptz = np.asarray(ptz, dtype=np.float64)
     pz = np.asarray(pz, dtype=np.float64)
@@ -471,17 +447,9 @@ def calculate_binned_performance(
 
         bin_mean_ptz = float(np.mean(ptz[selected]))
         bin_mean_pz = float(np.mean(pz[selected]))
-        bin_response = (
-            1.0 + bin_mean_pz / bin_mean_ptz
-            if bin_mean_ptz != 0.0
-            else np.nan
-        )
+        bin_response = (1.0 + bin_mean_pz / bin_mean_ptz if bin_mean_ptz != 0.0 else np.nan)
         bin_raw_resolution = float(np.std(pz[selected]))
-        bin_resolution = (
-            bin_raw_resolution / bin_response
-            if np.isfinite(bin_response) and bin_response != 0.0
-            else np.nan
-        )
+        bin_resolution = (bin_raw_resolution / bin_response if np.isfinite(bin_response) and bin_response != 0.0 else np.nan)
 
         mean_pz.append(bin_mean_pz)
         response.append(bin_response)
@@ -497,11 +465,7 @@ def calculate_binned_performance(
     )
 
 
-def build_met_inputs(
-    arrays: Mapping[str, object],
-    event: int,
-    include_jet_eta: bool = True,
-) -> METInputs:
+def build_met_inputs(arrays: Mapping[str, object], event: int, include_jet_eta: bool = True,) -> METInputs:
     """Build one event's MET input object from an awkward-array chunk."""
     branch = METConfig.MET_INPUT_BRANCHES
     return METInputs(
@@ -535,10 +499,7 @@ def build_met_inputs(
     )
 
 
-def build_maker_met(
-    arrays: Mapping[str, object],
-    event: int,
-) -> TransverseVector:
+def build_maker_met(arrays: Mapping[str, object], event: int,) -> TransverseVector:
     """Build the stored METMaker vector in GeV."""
     branch = METConfig.MET_MAKER_BRANCHES
     return TransverseVector(
@@ -547,12 +508,7 @@ def build_maker_met(
     )
 
 
-def build_truth_met(
-    arrays: Mapping[str, object],
-    event: int,
-    pt_branch: str = METConfig.TRUTH_MET_PT_BRANCH,
-    phi_branch: str = METConfig.TRUTH_MET_PHI_BRANCH,
-) -> Optional[TruthMET]:
+def build_truth_met(arrays: Mapping[str, object], event: int, pt_branch: str = METConfig.TRUTH_MET_PT_BRANCH, phi_branch: str = METConfig.TRUTH_MET_PHI_BRANCH,) -> Optional[TruthMET]:
     """Build the Int + IntMuons truth-MET reference vector."""
     pt_values = awkward_to_numpy(arrays[pt_branch][event])
     phi_values = awkward_to_numpy(arrays[phi_branch][event])
@@ -571,10 +527,7 @@ def build_truth_met(
 
     return TruthMET(pt=reference.pt, phi=reference.phi)
 
-def build_leptons(
-    arrays: Mapping[str, object],
-    event: int,
-) -> LeptonCollection:
+def build_leptons(arrays: Mapping[str, object], event: int,) -> LeptonCollection:
     """Build the muon collection in GeV."""
     branch = METConfig.LEPTON_BRANCHES
     return LeptonCollection(
@@ -584,10 +537,7 @@ def build_leptons(
     )
 
 
-def build_clusters(
-    arrays: Mapping[str, object],
-    event: int,
-) -> ClusterCollection:
+def build_clusters(arrays: Mapping[str, object], event: int,) -> ClusterCollection:
     """Build the global cluster collection, converting energies to GeV."""
     direction = METConfig.CLUSTER_DIRECTION_BRANCHES
     return ClusterCollection(

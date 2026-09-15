@@ -1,0 +1,314 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=25mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,booktabs,longtable,array}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xurl}
+\newcommand{\code}[1]{\texttt{\nolinkurl{#1}}}
+\newcommand{\ptmiss}{\boldsymbol{p}_{T}^{\mathrm{miss}}}
+\newcommand{\res}{\boldsymbol{\delta}}
+\newcommand{\sigq}{\sigma_{\mathrm{IQR}}}
+\title{Implementation note: forward-cluster MET resolution study in $W\to\mu\nu$}
+\author{}
+\date{Code inspected on 9 September 2026}
+\begin{document}
+\maketitle
+
+\section{Scope and conventions}
+This note describes the implementation in
+\code{analyses/met_resolution_study_wmunu.py},
+\code{analyses/met_inputs_common.py}, and
+\code{analyses/met_resolution_common.py}.
+It documents the configured analysis, rather than prescribing a general MET
+resolution method. The W entry point uses the truth W momentum as the boson
+reference. Shared names such as \code{ptz}, \code{pz}, \code{pTZ}, and $C^Z$
+are retained from the common W/Z implementation; they do not imply that a Z
+is reconstructed in this study. In particular, \code{pz} denotes a transverse
+projection, not momentum along the beam.
+
+All momentum vectors below have two Cartesian components in GeV. Azimuthal
+angles are used in radians. Input object transverse momenta, truth MET
+transverse momenta, truth-boson transverse momentum, and track-soft MET
+components are multiplied by $10^{-3}$. Cluster energies have the
+scale-specific conversions listed in Section~\ref{sec:clusters}.
+The study does not apply event weights in its retained distributions, means,
+or quantiles. Stored hard-object weights are used in MET reconstruction;
+these are distinct from event weights.
+
+\section{Input processing and event selection}
+Input files are supplied through repeated \code{--input} arguments and/or
+recursive discovery of files ending in \code{.root} under \code{--input-dir}.
+The combined paths are deduplicated and sorted. The default tree is
+\code{treeAnaWZ}; \code{--nEvents} (also \code{--n-events}) limits processed
+input events, with a negative default meaning all events. Files are processed
+in chunks through \code{NtupleProcessor}.
+
+For each event, the following operations occur in order:
+\begin{enumerate}
+\item Build the electron, muon, jet, and track-soft MET inputs. Require
+consistent lengths of each hard-object term's $p_T$, $\phi$, and weight arrays,
+including the jet $\eta$ array, and finite soft $x$ and $y$ components.
+\item Require at least one entry in \code{mu_pt}. Despite the counter name
+\code{one_muon}, this is not an exactly-one-muon requirement. No additional
+muon kinematic, isolation, charge, or transverse-mass cut is implemented here.
+\item Read \code{tboson_pt}, \code{tboson_eta}, and \code{tboson_phi}.
+Reject nonfinite values and zero boson $p_T$, then require
+$0\leq |\eta_W|<4.9$. The implementation tests $p_T\ne0$, assuming the physical
+input convention of nonnegative transverse momentum.
+\item Reconstruct the baseline MET and build a finite truth-MET reference.
+Require that a truth transverse vector can be obtained.
+\item Record the baseline truth-subtracted projection in a separate
+``jet-inclusive'' collection, before cluster-array validation.
+\item Identify forward input jets. Their presence increments a diagnostic
+counter; there is no requirement that an event contain a forward jet.
+\item Build the global cluster collection. Require the $\phi$ array and every
+configured energy array to have the same length as the cluster $\eta$ array.
+\item Store $|\eta_W|$, \code{avgMu}, and \code{nPrimVtx}, and fill all MET
+variants for the event.
+\end{enumerate}
+Thus the ordinary variant histograms share the sample passing cluster-array
+validation. The separate jet-inclusive mean can contain additional events.
+There is no Z-mass selection in the W entry point.
+
+\section{Baseline MET and truth reference}
+For a hard-object term $a\in\{e,\mu,j\}$, define the visible vector
+\begin{equation}
+ \boldsymbol{H}_a=\sum_{i\in a}w_i p_{T,i}
+       (\cos\phi_i,\sin\phi_i).
+\end{equation}
+The inputs are \code{met_input_el_pt/phi/weight},
+\code{met_input_mu_pt/phi/weight}, and
+\code{met_input_jet_pt/phi/weight}, with jet directions additionally taken
+from \code{met_input_jet_eta}. The slash notation abbreviates separate branch
+names with the same prefix. Objects with nonfinite $p_T$, $\phi$, or weight
+are omitted from their vector sum. An empty valid sum is zero.
+
+The baseline is reconstructed from these terms:
+\begin{equation}
+ \ptmiss_0=-(\boldsymbol{H}_e+\boldsymbol{H}_\mu+\boldsymbol{H}_j)
+                 +\boldsymbol{S}_{\mathrm{trk}},
+ \qquad
+ \boldsymbol{S}_{\mathrm{trk}}=10^{-3}
+ (\code{met_softtrk_mpx},\code{met_softtrk_mpy}).
+\end{equation}
+The stored soft term already has the missing-momentum sign. The study does
+not use \code{met_maker_mpx/mpy} as its baseline, although a builder for those
+branches exists in the common inputs file.
+
+Truth MET is read from \code{tu_pt.second} and \code{tu_phi.second}.
+The configured flattened-map indices are
+$\mathrm{Int}:0$, $\mathrm{IntMuons}:1$, $\mathrm{IntOut}:2$, and
+$\mathrm{NonInt}:3$. Currently
+\code{TRUTH_MET_REFERENCE_COMPONENTS = ("NonInt",)}, so
+\begin{equation}
+ \ptmiss_{\mathrm{truth}}=10^{-3}p_{T,\mathrm{NonInt}}
+    (\cos\phi_{\mathrm{NonInt}},\sin\phi_{\mathrm{NonInt}}).
+\end{equation}
+The builder supports summing several configured components, but does not do
+so with the present setting. Some labels and docstrings still say
+``Int + IntMuons''; the active configuration, rather than those labels,
+determines the reference.
+
+\section{Forward clusters and MET variants}\label{sec:clusters}
+Forward input jets and selected forward clusters both satisfy
+$2.5\leq|\eta|<4.9$, with finite $\eta$.
+Cluster directions come from \code{fClusterEta} and \code{fClusterPhi}.
+For each scale $s$, the code converts the energy to GeV as follows:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Scale key & Energy branch & Multiplier to GeV\\
+\midrule
+\code{em} & \code{fCluster_rawE} & $10^{-3}$\\
+\code{lcw} & \code{fCluster_calE} & $10^{-3}$\\
+\code{ml} & \code{fCluster_MLE} & $10^{-3}$\\
+\code{ml_forward} & \code{cluster_e_ML_forward} & $1$\\
+\code{truth} & \code{fCluster_truthE} & $10^{-3}$\\
+\bottomrule
+\end{tabular}
+\end{center}
+For a selected cluster set $A$, its visible transverse vector is
+\begin{equation}
+ \boldsymbol{K}_s(A)=\sum_{k\in A}
+ \frac{E_{k,s}}{\cosh\eta_k}(\cos\phi_k,\sin\phi_k).
+\end{equation}
+Only finite $\eta_k$, $\phi_k$, and $E_{k,s}$ enter this sum. Energy validity
+is checked separately for each scale. There is no explicit energy threshold,
+positivity cut, or additional cluster weight. Finite negative energies retain
+their sign. The arrays are assumed to describe the same clusters in the same
+order across scales; length checks alone cannot verify that assumption.
+
+Let $F$ contain all forward clusters, and $J_F$ all forward input jets.
+The non-overlapping subset $A\subset F$ satisfies
+\begin{equation}
+ \min_{j\in J_F}\Delta R_{kj}\geq0.4,
+ \qquad \Delta R_{kj}^2=(\eta_k-\eta_j)^2+
+ \left[\operatorname{atan2}(\sin(\phi_k-\phi_j),
+                              \cos(\phi_k-\phi_j))\right]^2.
+\end{equation}
+If there are no forward jets, every forward cluster passes this overlap
+requirement. Overlap is checked against forward input jets only, not against
+central jets or leptons. These are geometrically selected global clusters,
+not an independently tagged soft-cluster collection.
+
+There are twelve variants: the baseline, a truth-MET control, and two
+modifications for each of the five energy scales:
+\begin{align}
+ \ptmiss_{\mathrm{current}} &= \ptmiss_0,\\
+ \ptmiss_{\mathrm{truth\ control}} &= \ptmiss_{\mathrm{truth}},\\
+ \ptmiss_{\mathrm{keep},s} &= \ptmiss_0-\boldsymbol{K}_s(A),\\
+ \ptmiss_{\mathrm{replace},s} &= \ptmiss_0+
+                  \boldsymbol{H}_{j,F}-\boldsymbol{K}_s(F).
+\end{align}
+Here $\boldsymbol{H}_{j,F}$ uses the original forward jets' stored weights.
+Adding it back removes their contribution to baseline MET. Subtracting a
+cluster vector adds visible momentum to the reconstruction. The existing
+track-soft term is retained in both modifications.
+The variant keys are \code{current}, \code{truth_met},
+\code{keep_jets_forward_clusters_<scale>}, and
+\code{replace_forward_jets_with_all_forward_clusters_<scale>}.
+
+\section{Residual and boson projection}
+For each variant $v$, define
+\begin{align}
+ \res_v &= \ptmiss_v-\ptmiss_{\mathrm{truth}},\\
+ \boldsymbol{q}_T &= 10^{-3}\code{tboson_pt}
+                      (\cos\phi_W,\sin\phi_W),\qquad
+ \widehat{\boldsymbol{q}}_T=\boldsymbol{q}_T/|\boldsymbol{q}_T|,\\
+ P_{\parallel,v} &= \res_v\cdot\widehat{\boldsymbol{q}}_T
+       =\delta_{x,v}\cos\phi_W+\delta_{y,v}\sin\phi_W.
+\end{align}
+All variants receive the same event's boson vector and truth reference.
+The concrete call chain is
+\begin{verbatim}
+_append_variant(name, boson.vector, variant_met, truth_met_vector)
+    residual = met - truth_met
+    self.values[name].append(boson, met, residual)
+
+ObservableValues.append(z_vector, met, projection_met)
+    projected = met if projection_met is None else projection_met
+    self.pz.append(projected.dot(z_vector.unit()))
+\end{verbatim}
+The third argument is therefore the residual, and truth subtraction occurs
+before projection. The code also stores $|\ptmiss_v|$, its azimuth, $q_T$,
+and the Cartesian residual components. The Cartesian $x$ residual is not
+rotated into the boson frame.
+
+\section{Binned response and resolution}
+For a bin $B$ of the chosen variable, the response is
+\begin{equation}\label{eq:response}
+ C_v^Z(B)=1+\frac{\operatorname{median}(P_{\parallel,v}\mid B)}
+                         {\langle q_T\rangle_B}.
+\end{equation}
+This is the implemented definition, including its plus sign and its ratio
+of a median to a mean. It is not an average of event-by-event ratios.
+The code computes it independently in boson-$p_T$ bins and in
+\code{nPrimVtx} bins. It does not import a separately measured Z calibration.
+
+The local quantile wrapper documents the robust width as
+\begin{equation}\label{eq:width}
+ \sigq(X\mid B)=\frac{Q_{84}(X\mid B)-Q_{16}(X\mid B)}{2}.
+\end{equation}
+This is approximately a Gaussian standard deviation. The code's name
+``IQR'' refers to this central-68\% width, not the conventional
+interquartile range $Q_{75}-Q_{25}$. Specifically, the wrapper calls
+\code{calculate_sigma_iqr_in_x_bins} and divides its returned width by two.
+The imported helper was outside the three-file inspection scope: its exact
+percentile probabilities, interpolation, boundary handling, and minimum
+population rules have not been independently verified in this note.
+
+The response-corrected Cartesian resolution is
+\begin{equation}
+ R_{x,v}(B)=\frac{\sigq(\delta_{x,v}\mid B)}{C_v^Z(B)}.
+\end{equation}
+The division takes place after computing the width, using a single response
+per bin. It does not first correct each event with a $p_T$-dependent response.
+The numerator and response use the same binning variable and edges. Response
+bins are initialized to NaN and filled only for finite median and finite,
+nonzero mean $q_T$. Corrected widths require a finite numerator and finite,
+nonzero response. No absolute value or positivity requirement is imposed on
+the response, and no small-response threshold is applied.
+
+The projected-width outputs named \code{raw_resolution} and
+\code{resolution} both contain the same uncorrected
+$\sigq(P_\parallel\mid B)$ in the current implementation.
+The helper \code{calculate_binned_performance} also computes
+\code{np.std}, using the population standard deviation, and a mean-based
+response. These standard-deviation results are not used as the contents of
+the MET-resolution histograms described here. The helper supplies counts,
+and its arithmetic mean supplies the separate jet-inclusive mean histogram.
+
+\section{Binning and output inventory}
+The configured bin edges are
+\begin{align*}
+ q_T\ [\mathrm{GeV}]:\;&0,10,20,30,40,50,60,70,80,90,100,120,160,200,260,\\
+ \code{avgMu}:\;&0,5,10,\ldots,80,\\
+ \code{nPrimVtx}:\;&0,2,4,\ldots,50.
+\end{align*}
+The locally implemented binned mean and moment helper use half-open bins,
+with the final upper edge included. Quantile-bin details are delegated to
+the imported helper noted above. No $q_T<260$ event cut is applied before
+the pileup calculations: vertex bins can include events beyond the plotted
+boson-$p_T$ range.
+
+In the following inventory, \code{<v>} denotes a variant key.
+\begin{description}
+\item[Basic distributions.]
+\code{h_met_<v>} stores MET magnitude (120 bins, 0--300 GeV);
+\code{h_met_phi_<v>} stores MET azimuth (64 bins, $-\pi$ to $\pi$);
+\code{h_pz_<v>} stores $P_\parallel$ (120 bins, $-120$ to 120 GeV).
+\code{h2_pz_vs_pTZ_<v>} uses the configured $q_T$ edges and the same
+projection range. MET and projection distributions use a joint finite mask
+on $q_T$, $P_\parallel$, and MET magnitude; the azimuth uses its own finite mask.
+\item[Boson-$p_T$ summaries.]
+\code{h_entries_vs_pTZ_<v>} contains event counts;
+\code{h_mean_pz_vs_pTZ_<v>} contains the median projection despite its name;
+\code{h_response_vs_pTZ_<v>} contains Eq.~\eqref{eq:response};
+\code{h_raw_resolution_vs_pTZ_<v>} and
+\code{h_resolution_vs_pTZ_<v>} both contain Eq.~\eqref{eq:width} for
+$P_\parallel$.
+\code{h_iqr_met_px_residual_over_cz_vs_pTZ_<v>} contains $R_x$.
+\item[Pileup summaries.]
+\code{h_rms_met_px_residual_vs_avgMu_<v>} and
+\code{h_rms_met_py_residual_vs_avgMu_<v>} contain the uncorrected
+robust widths of $\delta_x$ and $\delta_y$. Corresponding names with
+\code{nPrimVtx} replace \code{avgMu}. The legacy \code{rms} names do not
+indicate an RMS calculation.
+\code{h_response_vs_nPrimVtx_<v>} stores the exact vertex-binned response
+used by \code{h_iqr_met_px_residual_over_cz_vs_nPrimVtx_<v>}.
+There is no analogous corrected $y$ or corrected \code{avgMu} output here.
+\item[Shared distributions.]
+\code{h_boson_eta} stores $|\eta_W|$ (100 bins, 0--4.9).
+\code{h_mean_pz_vs_pTZ_jet_inclusive} stores the arithmetic mean of the
+baseline projection before cluster-array validation. Additional forward
+cluster diagnostics are delegated to \code{ForwardClusterDiagnostics};
+their definitions lie outside this note's inspected source files.
+\end{description}
+
+The default output is \code{met_resolution_study.root}, configurable with
+\code{--output}. It is opened in ROOT \code{RECREATE} mode. Observables are
+accumulated, converted to NumPy arrays, reduced into histogram contents,
+and written. The local analysis does not explicitly calculate uncertainties
+on the quantiles or response ratios; ROOT histogram construction, including
+any default errors and treatment of NaN contents, is delegated to imported
+histogram helpers.
+
+\section{Interpretation and implementation limits}
+A response near unity means that the median projected residual is small
+relative to the mean boson transverse momentum in that bin. It does not
+imply a narrow Cartesian residual distribution. Different scales can have
+similar $C^Z$ and different $R_x$.
+Moreover, a response recomputed in vertex bins is not an average of responses
+in boson-$p_T$ bins: the event mixtures differ, and the median-to-mean ratio
+is nonlinear. The differing $q_T$ coverage noted above can also matter.
+
+For finite, populated bins with nonzero mean boson $p_T$, the truth-MET
+control has zero residual, unit response, and zero resolution. Deviations
+from this expectation would warrant checking the input values and helper
+behavior.
+The scale conversions assume the documented branch units; those units and
+cross-scale cluster ordering are not inferred or validated from the data.
+Nonfinite cluster energies are skipped separately by scale, and overlap
+removal only considers forward jets. These details should be retained when
+comparing this implementation with other MET definitions.
+\end{document}

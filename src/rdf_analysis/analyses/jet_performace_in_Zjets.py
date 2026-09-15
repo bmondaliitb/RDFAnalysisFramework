@@ -433,6 +433,9 @@ class ZJetsAnalysis:
                 leading_jet_from_cluster_pt_ml.append(cluster_pt_ml)
                 cluster_pt_truth = calculate_pt_from_energy(cluster_leading_jet.jet_energy_truth, reco_jets.leading_jet.eta)
                 leading_jet_from_cluster_pt_truth.append(cluster_pt_truth)
+                # print jet pt from cluster vs from container
+                print(f"jet pt : {reco_jets.leading_jet.pt},  jet pt from cluster em {cluster_pt_em}\n")
+                print(f"jet pt : {reco_jets.leading_jet.pt},  jet pt from cluster lcw {cluster_pt_lcw}\n")
 
                 pt_ref_from_cluster_pt_em.append(
                     project_jet_on_z_axis(cluster_pt_em, reco_jets.leading_jet.phi,

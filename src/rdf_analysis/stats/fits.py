@@ -1,8 +1,23 @@
 import os
+from typing import Iterable
 
 import numpy as np
 import ROOT
 from ..config import config_fits
+
+def calculate_binned_mean(x_values: np.ndarray, values: np.ndarray, bin_edges: Iterable[float], ) -> np.ndarray:
+    """Mean of values in x bins, including the final upper edge."""
+    edges = np.asarray(bin_edges, dtype=np.float64)
+    finite = np.isfinite(x_values) & np.isfinite(values)
+    means = np.full(len(edges) - 1, np.nan)
+
+    for index, (low, high) in enumerate(zip(edges[:-1], edges[1:])):
+        upper = x_values <= high if index == len(edges) - 2 else x_values < high
+        selected = finite & (x_values >= low) & upper
+        if np.any(selected):
+            means[index] = float(np.mean(values[selected]))
+    return means
+
 
 def calculate_mean_sigma_in_x_bins(x_variable, y_variable, x_bin_edges):
     x = np.asarray(x_variable, dtype=np.float64)

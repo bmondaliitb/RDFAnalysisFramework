@@ -16,12 +16,7 @@ class ForwardClusterDiagnostics:
         "outside_jets": "outside forward jets",
     }
 
-    def __init__(
-        self,
-        energy_bins: int,
-        energy_min: float,
-        energy_max: float,
-    ) -> None:
+    def __init__(self, energy_bins: int, energy_min: float, energy_max: float,) -> None:
         self.energy_bins = energy_bins
         self.energy_min = energy_min
         self.energy_max = energy_max
@@ -47,12 +42,7 @@ class ForwardClusterDiagnostics:
                 histograms[name] = histogram
         return histograms
 
-    def record(
-        self,
-        clusters: ClusterCollection,
-        forward_mask: np.ndarray,
-        away_from_jets_mask: np.ndarray,
-    ) -> None:
+    def record(self, clusters: ClusterCollection, forward_mask: np.ndarray, away_from_jets_mask: np.ndarray,) -> None:
         """Record forward-cluster energies split by jet-cone membership."""
         masks = {
             "inside_jets": forward_mask & ~away_from_jets_mask,

@@ -1,18 +1,15 @@
 """Shared object-oriented implementation for W/Z MET resolution studies."""
 
-import argparse
-import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Mapping, Optional, Tuple, Union
+from typing import Dict, List, Mapping, Optional, Union
 
 import numpy as np
 import ROOT
 
-from rdf_analysis.analyses.met_forward_cluster_diagnostics import (ForwardClusterDiagnostics,)
 from rdf_analysis.analyses.met_inputs_common import (BinnedPerformance, METConfig, ObservableValues, TransverseVector, build_clusters, build_met_inputs, build_truth_met, calculate_binned_performance,)
 from rdf_analysis.core import NtupleProcessor
-from rdf_analysis.stats.fits import (calculate_sigma_iqr_in_x_bins,)
+from rdf_analysis.stats.fits import calculate_sigma_iqr_in_x_bins, calculate_binned_mean
 from rdf_analysis.stats.histograms import (make_hist_from_bin_contents, make_numpy_hist, make_numpy_hists_2d,)
 
 
@@ -58,35 +55,8 @@ class METResolutionConfig:
 @dataclass(frozen=True)
 class BosonCandidate:
     """Selected boson direction and pseudorapidity."""
-
     vector: TransverseVector
     eta: float
-
-
-def calculate_binned_mean(x_values: np.ndarray, values: np.ndarray, bin_edges: Iterable[float],) -> np.ndarray:
-    """Mean of values in x bins, including the final upper edge."""
-    edges = np.asarray(bin_edges, dtype=np.float64)
-    finite = np.isfinite(x_values) & np.isfinite(values)
-    means = np.full(len(edges) - 1, np.nan)
-
-    for index, (low, high) in enumerate(zip(edges[:-1], edges[1:])):
-        upper = x_values <= high if index == len(edges) - 2 else x_values < high
-        selected = finite & (x_values >= low) & upper
-        if np.any(selected):
-            means[index] = float(np.mean(values[selected]))
-    return means
-
-
-def calculate_iqr_gaussian_sigma_in_x_bins(x_values: np.ndarray, values: np.ndarray, bin_edges: Iterable[float],) -> Tuple[np.ndarray, np.ndarray]:
-    """Return the median and robust Gaussian-equivalent sigma in x bins.
-
-    The shared quantile helper returns the full central-68% interval.  Half of
-    that interval, ``(Q84 - Q16) / 2``, equals one standard deviation for a
-    Gaussian while remaining insensitive to sparsely populated tails.
-    """
-    median, central_68_width = calculate_sigma_iqr_in_x_bins(x_values, values, bin_edges,)
-    return median, central_68_width / 2.0
-
 
 class METResolutionStudyBase(ABC):
     """Shared event loop, MET scenarios, metrics, and ROOT output."""
@@ -103,31 +73,31 @@ class METResolutionStudyBase(ABC):
         config = self.CONFIG
         self.processor = NtupleProcessor(input_files, tree_name, max_events)
         self.output_path = output_path
+
         self.eta_min = config.FORWARD_ETA_MIN
         self.eta_max = config.FORWARD_ETA_MAX
         self.cluster_radius = config.CLUSTER_RADIUS
         self.ptz_bin_edges = np.asarray(config.PTZ_BIN_EDGES, dtype=np.float64)
         self.apply_z_mass_window = config.APPLY_Z_MASS_WINDOW
+
         self.boson_abs_eta_min = config.BOSON_ABS_ETA_MIN
         self.boson_abs_eta_max = config.BOSON_ABS_ETA_MAX
         if (self.boson_abs_eta_min < 0.0 or self.boson_abs_eta_min >= self.boson_abs_eta_max):
             raise ValueError("require 0 <= BOSON_ABS_ETA_MIN < BOSON_ABS_ETA_MAX")
+
         self.truth_pt_branch = METConfig.TRUTH_MET_PT_BRANCH
         self.truth_phi_branch = METConfig.TRUTH_MET_PHI_BRANCH
 
         self.variant_labels = self._build_variant_labels()
-        self.values = {name: ObservableValues() for name in self.variant_labels}
         self.jet_inclusive_values = ObservableValues()
         self.boson_eta_values = []
+
+        self.values = {name: ObservableValues() for name in self.variant_labels}
         self.met_phi_values = {name: [] for name in self.variant_labels}
+
         self.pileup_values = {"avgMu": [], "nPrimVtx": []}
         self.met_residuals = {name: {"x": [], "y": []} for name in self.variant_labels}
-        self.forward_object_histograms = {}
-        self.cluster_diagnostics = ForwardClusterDiagnostics(
-            energy_bins=config.CLUSTER_ENERGY_BINS,
-            energy_min=config.CLUSTER_ENERGY_MIN,
-            energy_max=config.CLUSTER_ENERGY_MAX,
-        )
+
         self.performance: Dict[str, BinnedPerformance] = {}
         self.histograms = {}
         self.event_counts = {
@@ -144,16 +114,8 @@ class METResolutionStudyBase(ABC):
     def _build_variant_labels(self) -> Dict[str, str]:
         labels = dict(self.BASE_VARIANT_LABELS)
         for scale, (scale_label, _) in METConfig.CLUSTER_SCALES.items():
-            labels[f"keep_jets_forward_clusters_{scale}"] = (
-                "forward jets kept + forward clusters outside jets with "
-                f"pT > {self.CONFIG.FORWARD_JET_PT_MIN:g} GeV, "
-                f"{scale_label} scale"
-            )
-            labels[f"replace_forward_jets_with_all_forward_clusters_{scale}"] = (
-                f"forward jets with pT > {self.CONFIG.FORWARD_JET_PT_MIN:g} GeV "
-                "removed + all forward clusters, "
-                f"{scale_label} scale"
-            )
+            labels[f"keep_jets_forward_clusters_{scale}"] = ("forward jets kept + forward clusters outside jets with " f"pT > {self.CONFIG.FORWARD_JET_PT_MIN:g} GeV, {scale_label} scale")
+            labels[f"replace_forward_jets_with_all_forward_clusters_{scale}"] = (f"forward jets with pT > {self.CONFIG.FORWARD_JET_PT_MIN:g} GeV " "removed + all forward clusters, " f"{scale_label} scale")
         return labels
 
     @property
@@ -270,8 +232,6 @@ class METResolutionStudyBase(ABC):
             # matching radius of forward jets above the configured pT cut.
             away_mask = clusters.away_from_jets(met_inputs.jets.eta[selected_forward_indices], met_inputs.jets.phi[selected_forward_indices], self.cluster_radius,)
             forward_cluster_mask = clusters.in_abs_eta_range(self.eta_min, self.eta_max,)
-            self._record_forward_objects(met_inputs.jets, clusters, forward_indices, selected_forward_indices, forward_cluster_mask, away_mask,)
-            self.cluster_diagnostics.record(clusters, forward_cluster_mask, away_mask,)
             forward_nonoverlap_vectors = clusters.visible_vectors(forward_cluster_mask & away_mask)
             all_forward_cluster_vectors = clusters.visible_vectors(forward_cluster_mask)
             # Variant B removes forward jets above the configured pT cut, then
@@ -281,49 +241,6 @@ class METResolutionStudyBase(ABC):
             for scale in METConfig.CLUSTER_SCALES:
                 self._append_variant(f"keep_jets_forward_clusters_{scale}", boson.vector, current_met - forward_nonoverlap_vectors[scale], truth_met_vector,)
                 self._append_variant(f"replace_forward_jets_with_all_forward_clusters_{scale}", boson.vector, (current_met + forward_jet_vector - all_forward_cluster_vectors[scale]), truth_met_vector,)
-
-    def _fill_forward_object_histogram(self, name, label, values, kind, weighted=False) -> None:
-        """Accumulate object counts without retaining per-cluster arrays."""
-        if name not in self.forward_object_histograms:
-            quantity = "ENERGY" if kind == "CLUSTER" else "PT"
-            bins = getattr(self.CONFIG, f"FORWARD_{kind}_{quantity}_BINS")
-            low, high = getattr(self.CONFIG, f"FORWARD_{kind}_{quantity}_RANGE")
-            axis = "w_{jet} p_{T}" if weighted else "p_{T}"
-            if kind == "CLUSTER":
-                axis = "E_{cluster}"
-            self.forward_object_histograms[name] = make_numpy_hist(name, f"{label};{axis} [GeV];Objects", bins, low, high, np.empty(0, dtype=np.float64),)
-        histogram = self.forward_object_histograms[name]
-        for value in values[np.isfinite(values)]:
-            histogram.Fill(float(value))
-
-    def _record_forward_objects(
-        self, jets, clusters, forward_indices, selected_indices,
-        forward_mask, away_mask,
-    ) -> None:
-        """Record the exact object selections used in the MET variants."""
-        retained_indices = forward_indices[~np.isin(forward_indices, selected_indices)]
-        jet_selections = {
-            "current_and_keep_jets": (forward_indices, "Forward jets in current/keep-jets MET"),
-            "removed": (selected_indices, "Forward jets removed in replacement scenario"),
-            "retained_after_removal": (retained_indices, "Forward jets retained in replacement scenario"),
-        }
-        for scenario, (indices, label) in jet_selections.items():
-            valid = (np.isfinite(jets.pt[indices]) & np.isfinite(jets.phi[indices]) & np.isfinite(jets.weight[indices]))
-            indices = indices[valid]
-            self._fill_forward_object_histogram(f"h_forward_jet_pt_{scenario}", label, jets.pt[indices], "JET",)
-            self._fill_forward_object_histogram(f"h_forward_jet_weighted_pt_{scenario}", label, jets.pt[indices] * jets.weight[indices], "JET", weighted=True,)
-        cluster_selections = {
-            "keep_jets_added": (forward_mask & away_mask, "Forward clusters added with jets kept"),
-            "replace_jets_added": (forward_mask, "All forward clusters added in replacement scenario"),
-            "keep_jets_excluded": (forward_mask & ~away_mask, "Forward clusters excluded by jet overlap"),
-        }
-        for scale, energy in clusters.energy.items():
-            scale_label = METConfig.CLUSTER_SCALES[scale][0]
-            finite = (np.isfinite(clusters.eta) & np.isfinite(clusters.phi) & np.isfinite(energy))
-            for scenario, (mask, label) in cluster_selections.items():
-                selected = mask & finite
-                # Cluster energies are already converted to GeV on input.
-                self._fill_forward_object_histogram(f"h_forward_cluster_energy_{scenario}_{scale}", f"{label}, {scale_label} scale", energy[selected], "CLUSTER",)
 
     def _append_variant(self, name: str, boson: TransverseVector, met: TransverseVector, truth_met: TransverseVector,) -> None:
         residual = met - truth_met
@@ -337,7 +254,8 @@ class METResolutionStudyBase(ABC):
         self.performance = {}
         for name, values in self.values.items():
             moments = calculate_binned_performance(values.ptz, values.pz, self.ptz_bin_edges,)
-            median_pz, iqr_sigma_pz = calculate_iqr_gaussian_sigma_in_x_bins(values.ptz, values.pz, self.ptz_bin_edges,)
+            median_pz, iqr_sigma_pz = calculate_sigma_iqr_in_x_bins(values.ptz, values.pz, self.ptz_bin_edges,)
+            iqr_sigma_pz = iqr_sigma_pz/2.0
             mean_ptz = calculate_binned_mean(values.ptz, values.ptz, self.ptz_bin_edges,)
             response = np.full_like(median_pz, np.nan)
             valid = (np.isfinite(median_pz) & np.isfinite(mean_ptz) & (mean_ptz != 0.0))
@@ -352,8 +270,6 @@ class METResolutionStudyBase(ABC):
         self.histograms[name] = make_hist_from_bin_contents(name, (f"jet-inclusive current MET;p_{{T}}^{{{symbol}}} [GeV];" "<P_{||}^{reco-truth}> [GeV]"), self.ptz_bin_edges, inclusive.mean_pz,)
         finite_eta = np.isfinite(self.boson_eta_values)
         self.histograms["h_boson_eta"] = make_numpy_hist("h_boson_eta", f"Selected events;|#eta_{{{symbol}}}|;Events", config.BOSON_ABS_ETA_BINS, config.BOSON_ABS_ETA_MIN, config.BOSON_ABS_ETA_MAX, self.boson_eta_values[finite_eta],)
-        self.histograms.update(self.cluster_diagnostics.build_histograms())
-        self.histograms.update(self.forward_object_histograms)
         for variant, values in self.values.items():
             self._build_variant_histograms(variant, values)
             self._build_pileup_resolution_histograms(variant)
@@ -367,11 +283,12 @@ class METResolutionStudyBase(ABC):
             for component in ("x", "y"):
                 # Keep the legacy key so existing plotting jobs still find it.
                 histogram_name = (f"h_rms_met_p{component}_residual_vs_{variable}_{name}")
-                _, iqr_sigma = calculate_iqr_gaussian_sigma_in_x_bins(self.pileup_values[variable], self.met_residuals[name][component], edges,)
+                _, iqr_sigma = calculate_sigma_iqr_in_x_bins(self.pileup_values[variable], self.met_residuals[name][component], edges,)
+                iqr_sigma = iqr_sigma/2.0
                 self.histograms[histogram_name] = make_hist_from_bin_contents(histogram_name, (f"{self.variant_labels[name]};{axis_title};#sigma_{{IQR}}(p_{{{component}}}^{{miss}}-p_{{{component}}}^{{miss,true}}) [GeV]"), edges, iqr_sigma,)
                 if variable == "nPrimVtx" and component == "x":
                     values = self.values[name]
-                    median_pz, _ = calculate_iqr_gaussian_sigma_in_x_bins(self.pileup_values[variable], values.pz, edges,)
+                    median_pz, _ = calculate_sigma_iqr_in_x_bins(self.pileup_values[variable], values.pz, edges,)
                     mean_ptz = calculate_binned_mean(self.pileup_values[variable], values.ptz, edges,)
                     # Calculate C^Z in the same vertex bins as the width.
                     response = np.full_like(median_pz, np.nan)
@@ -397,7 +314,8 @@ class METResolutionStudyBase(ABC):
 
         performance = self.performance[name]
         # C^Z is the existing per-bin response; sigma_IQR = (Q84 - Q16) / 2.
-        _, iqr_sigma_px = calculate_iqr_gaussian_sigma_in_x_bins(values.ptz, self.met_residuals[name]["x"], self.ptz_bin_edges,)
+        _, iqr_sigma_px = calculate_sigma_iqr_in_x_bins(values.ptz, self.met_residuals[name]["x"], self.ptz_bin_edges,)
+        iqr_sigma_px = iqr_sigma_px/2.0
         corrected_px_resolution = np.full_like(iqr_sigma_px, np.nan)
         valid_response = (np.isfinite(iqr_sigma_px) & np.isfinite(performance.response) & (performance.response != 0.0))
         np.divide(iqr_sigma_px, performance.response, out=corrected_px_resolution, where=valid_response,)
@@ -426,31 +344,3 @@ class METResolutionStudyBase(ABC):
             histogram.Write()
         output.Close()
         print(f"Histograms saved to {self.output_path}")
-
-    def print_summary(self) -> None:
-        print(f"\nFORWARD-JET {self.BOSON_SYMBOL} MET RESOLUTION STUDY")
-        for name, count in self.event_counts.items():
-            print("  {:40s}: {:10d}".format(name, count))
-
-
-def build_argument_parser(description: str, default_output: str = "met_resolution_study.root",) -> argparse.ArgumentParser:
-    """Build the common W/Z command-line interface."""
-    parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--input", action="append", help="Input ROOT ntuple; repeat for multiple files.",)
-    parser.add_argument("--input-dir", help="Directory searched recursively for ROOT ntuples.",)
-    parser.add_argument("--tree", default="treeAnaWZ", help="Input TTree name.")
-    parser.add_argument("--nEvents", "--n-events", dest="n_events", type=int, default=-1, help="Maximum events to process; negative means all.",)
-    parser.add_argument("--output", default=default_output, help="Output ROOT histogram file.",)
-    return parser
-
-
-def input_files_from_args(args) -> List[str]:
-    """Resolve explicit and recursively discovered input ROOT files."""
-    input_files = list(args.input or [])
-    if args.input_dir:
-        for root, _, files in os.walk(args.input_dir):
-            input_files.extend(os.path.join(root, name) for name in files if name.endswith(".root"))
-    input_files = sorted(set(input_files))
-    if not input_files:
-        raise ValueError("Provide at least one --input or --input-dir.")
-    return input_files

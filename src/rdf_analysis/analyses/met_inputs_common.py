@@ -110,6 +110,7 @@ class TransverseVector:
             return TransverseVector(np.nan, np.nan)
         return TransverseVector(self.x / self.pt, self.y / self.pt)
 
+    # used for simple v1 + v2 - v3 operations
     def __add__(self, other: "TransverseVector") -> "TransverseVector":
         return TransverseVector(self.x + other.x, self.y + other.y)
 
@@ -154,6 +155,7 @@ class METInputTerm:
     weight: np.ndarray
     eta: Optional[np.ndarray] = None
 
+    # __post__init__ adds custom logics to __init__ since we are using dataclass
     def __post_init__(self) -> None:
         self.pt = np.asarray(self.pt, dtype=np.float64)
         self.phi = np.asarray(self.phi, dtype=np.float64)
@@ -171,7 +173,7 @@ class METInputTerm:
             sizes.append(len(self.eta))
         return len(set(sizes)) == 1
 
-    def visible_vector(self, indices: Optional[Sequence[int]] = None,) -> TransverseVector:
+    def visible_vector(self, indices: Optional[Sequence[int]]=None,) -> TransverseVector:
         """Return sum_i weight_i * pT_i for this term."""
         selected = (np.arange(self.count, dtype=np.int64) if indices is None else np.asarray(indices, dtype=np.int64))
         pt = self.pt[selected]
@@ -223,19 +225,11 @@ class METInputs:
         )
         return -hard_term + self.soft_term
 
-    def forward_jet_indices(
-        self,
-        eta_min: float,
-        eta_max: float,
-    ) -> np.ndarray:
+    def forward_jet_indices(self, eta_min: float, eta_max: float,) -> np.ndarray:
         abs_eta = np.abs(self.jets.eta)
         # Keep the original jet indices so the same subset can be summed with
         # its stored weights later (e.g. when removing forward jets).
-        return np.flatnonzero(
-            np.isfinite(abs_eta)
-            & (abs_eta >= eta_min)
-            & (abs_eta < eta_max)
-        )
+        return np.flatnonzero(np.isfinite(abs_eta) & (abs_eta >= eta_min) & (abs_eta < eta_max))
 
 
 
@@ -323,37 +317,20 @@ class ClusterCollection:
         eta_difference = cluster_eta - jets_eta
 
         raw_phi_difference = cluster_phi - jets_phi
-        phi_difference = np.arctan2(
-            np.sin(raw_phi_difference),
-            np.cos(raw_phi_difference),
-        )
+        phi_difference = np.arctan2(np.sin(raw_phi_difference), np.cos(raw_phi_difference),)
 
-        distance_squared = (
-                eta_difference ** 2
-                + phi_difference ** 2
-        )
+        distance_squared = (eta_difference ** 2 + phi_difference ** 2)
 
         # A cluster is retained only when its closest forward jet is outside
         # the overlap cone; this mask is later combined with the η acceptance.
-        closest_jet_distance_squared = np.min(
-            distance_squared,
-            axis=1,
-        )
+        closest_jet_distance_squared = np.min(distance_squared, axis=1,)
 
         return closest_jet_distance_squared >= radius ** 2
 
-    def in_abs_eta_range(
-        self,
-        eta_min: float,
-        eta_max: float,
-    ) -> np.ndarray:
+    def in_abs_eta_range(self, eta_min: float, eta_max: float,) -> np.ndarray:
         """Mask finite clusters in eta_min <= |eta| < eta_max."""
         abs_eta = np.abs(self.eta)
-        return (
-            np.isfinite(abs_eta)
-            & (abs_eta >= eta_min)
-            & (abs_eta < eta_max)
-        )
+        return (np.isfinite(abs_eta) & (abs_eta >= eta_min) & (abs_eta < eta_max))
 
     def visible_vectors(self, mask: np.ndarray) -> Dict[str, TransverseVector]:
         """Sum cluster pT vectors for every configured energy scale."""
@@ -365,21 +342,13 @@ class ClusterCollection:
         # Convert cluster energy to transverse momentum with pT = E/cosh(η),
         # then sum each calibration scale independently.
         for scale, energy in self.energy.items():
-            valid = (
-                mask
-                & np.isfinite(self.eta)
-                & np.isfinite(self.phi)
-                & np.isfinite(energy)
-            )
+            valid = (mask & np.isfinite(self.eta) & np.isfinite(self.phi) & np.isfinite(energy))
             if not np.any(valid):
                 vectors[scale] = TransverseVector.zero()
                 continue
 
             cluster_pt = energy[valid] / np.cosh(self.eta[valid])
-            vectors[scale] = TransverseVector(
-                float(np.sum(cluster_pt * np.cos(self.phi[valid]))),
-                float(np.sum(cluster_pt * np.sin(self.phi[valid]))),
-            )
+            vectors[scale] = TransverseVector(float(np.sum(cluster_pt * np.cos(self.phi[valid]))), float(np.sum(cluster_pt * np.sin(self.phi[valid]))),)
         return vectors
 
 
@@ -397,7 +366,6 @@ class ObservableValues:
         projected = met if projection_met is None else projection_met
         self.pz.append(projected.dot(z_vector.unit()))
         self.met.append(met.pt)
-
 
     def convert_to_numpy(self) -> None:
         for name in ("ptz", "pz", "met",):

@@ -284,7 +284,6 @@ class LeptonCollection:
 @dataclass
 class ClusterCollection:
     """Global topo-clusters with alternative energy calibrations."""
-
     eta: np.ndarray
     phi: np.ndarray
     energy: Dict[str, np.ndarray]
@@ -326,6 +325,33 @@ class ClusterCollection:
         closest_jet_distance_squared = np.min(distance_squared, axis=1,)
 
         return closest_jet_distance_squared >= radius ** 2
+
+    def clusters_inside_jet(self, jet_eta: float, jet_phi: float, radius: float = 0.4) -> np.ndarray:
+        """Return a mask for finite clusters within `radius` of one jet."""
+        if self.count == 0:
+            return np.zeros(0, dtype=bool)
+
+        eta_difference = self.eta - jet_eta
+        raw_phi_difference = self.phi - jet_phi
+        phi_difference = np.arctan2(np.sin(raw_phi_difference), np.cos(raw_phi_difference))
+        distance_squared = eta_difference ** 2 + phi_difference ** 2
+        return (
+            np.isfinite(self.eta)
+            & np.isfinite(self.phi)
+            & np.isfinite(distance_squared)
+            & (distance_squared < radius ** 2)
+        )
+
+    def energy_inside_jet(self, jet_eta: float, jet_phi: float, radius: float = 0.4) -> Dict[str, float]:
+        """Sum cluster energy per calibration scale inside one jet cone."""
+        mask = self.clusters_inside_jet(jet_eta, jet_phi, radius)
+        sums = {}
+        cluster_energies = {}
+        for scale, energy in self.energy.items():
+            valid = mask & np.isfinite(energy)
+            sums[scale] = float(np.sum(energy[valid])) if np.any(valid) else 0.0
+            cluster_energies[scale] = energy[valid]
+        return sums, cluster_energies
 
     def in_abs_eta_range(self, eta_min: float, eta_max: float,) -> np.ndarray:
         """Mask finite clusters in eta_min <= |eta| < eta_max."""
@@ -450,13 +476,8 @@ def build_met_inputs(arrays: Mapping[str, object], event: int, include_jet_eta: 
             weight=awkward_to_numpy(arrays[branch["muon_weight"]][event]),
         ),
         jets=METInputTerm(
-            pt=awkward_to_numpy(arrays[branch["jet_pt"]][event])
-            * METConfig.GEV,
-            eta=(
-                awkward_to_numpy(arrays[branch["jet_eta"]][event])
-                if include_jet_eta
-                else None
-            ),
+            pt=awkward_to_numpy(arrays[branch["jet_pt"]][event]) * METConfig.GEV,
+            eta=(awkward_to_numpy(arrays[branch["jet_eta"]][event]) if include_jet_eta else None),
             phi=awkward_to_numpy(arrays[branch["jet_phi"]][event]),
             weight=awkward_to_numpy(arrays[branch["jet_weight"]][event]),
         ),

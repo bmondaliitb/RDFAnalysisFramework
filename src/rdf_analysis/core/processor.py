@@ -5,27 +5,6 @@ import uproot
 def awkward_to_numpy(values, dtype=np.float64):
     return ak.to_numpy(values).astype(dtype, copy=False)
 
-
-def _to_numpy_if_regular(values):
-    if isinstance(values, ak.Array):
-        try:
-            return ak.to_numpy(values)
-        except (TypeError, ValueError):
-            return values
-
-    return np.asarray(values)
-
-
-def _concatenate_chunks(chunks):
-    if not chunks:
-        return np.array([], dtype=np.float64)
-
-    if any(isinstance(chunk, ak.Array) for chunk in chunks):
-        return _to_numpy_if_regular(ak.concatenate(chunks))
-
-    return np.concatenate([np.asarray(chunk) for chunk in chunks])
-
-
 class NtupleProcessor:
     """uproot/awkward reader shared by analysis scripts."""
 
@@ -90,22 +69,13 @@ class NtupleProcessor:
         required_branches = self._required_branches(columns)
         missing_branches = sorted(set(required_branches) - self.branch_names())
         if missing_branches:
-            print(
-                "Input tree is missing required branches: {}".format(
-                    ", ".join(missing_branches)
-                )
-            )
+            print("Input tree is missing required branches: {}".format(", ".join(missing_branches)))
 
         processed_events = 0
         step_size = min(self.step_size, self.n_events_to_process)
 
         for raw_arrays in uproot.iterate(
-            self._input_trees(),
-            filter_name=required_branches,
-            step_size=step_size,
-            library="ak",
-            how=dict,
-        ):
+            self._input_trees(), filter_name=required_branches, step_size=step_size, library="ak", how=dict,):
             if processed_events >= self.n_events_to_process:
                 break
 
@@ -121,20 +91,3 @@ class NtupleProcessor:
                 continue
 
             yield {column: raw_arrays[column] for column in columns}
-
-    def materialize(self, columns):
-        buffers = {column: [] for column in columns}
-        for arrays in self.iter_arrays(columns):
-            for column in columns:
-                buffers[column].append(arrays[column])
-
-        return {
-            column: _concatenate_chunks(chunks)
-            for column, chunks in buffers.items()
-        }
-
-    def to_numpy(self, columns):
-        return self.materialize(columns)
-
-    def get_column(self, column):
-        return self.materialize([column])[column]

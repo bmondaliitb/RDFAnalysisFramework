@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 """W→μν MET resolution study with alternative forward-cluster inputs."""
 
-import sys
-from pathlib import Path
 from typing import Dict, List, Mapping, Optional
 
 import numpy as np
 import ROOT
 import argparse
 import os
-
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from rdf_analysis.analyses.met_inputs_common import (
     METConfig,

@@ -63,44 +63,28 @@ import sys
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from rdf_analysis.analyses.hadrecoil_common import NtupleProcessor_hadrecoil
+from rdf_analysis.analyses.hadrecoil_common import read_input_file, calculate_recoil
 from rdf_analysis.physics import compute_sum_et_from_energy, hadrecoil_from_truth_particles, hadronic_recoil_from_clusters_python
 from rdf_analysis.stats import get_bins_log, make_numpy_hist, make_hist_from_bin_contents
 from rdf_analysis.stats.fits import calculate_gaussian_fit_params_from_arrays, calculate_mean_sigma_in_x_bins
 
 
-def study_3(proc, outfile):
+def study_3(recoil, outfile):
     # Keep track of the current ROOT directory so per-region writes are scoped safely.
     prev_dir = ROOT.gDirectory
 
-    # Materialize event-level inputs needed to recompute recoil observables in eta slices.
-    arrays = proc.to_numpy([
-        "lep_pt",
-        "lep_eta",
-        "lep_phi",
-        "clus_e_truth",
-        "clus_e_em",
-        "clus_e_ml",
-        "clus_eta",
-        "clus_phi",
-        "met_truth_particle_pt",
-        "met_truth_particle_eta",
-        "met_truth_particle_phi",
-        "met_truth_particle_e",
-    ])
-
-    df_lep_pt = arrays["lep_pt"]
-    df_lep_eta = arrays["lep_eta"]
-    df_lep_phi = arrays["lep_phi"]
-    df_clus_e_truth = arrays["clus_e_truth"]
-    df_clus_e_em = arrays["clus_e_em"]
-    df_clus_e_ml = arrays["clus_e_ml"]
-    df_clus_eta = arrays["clus_eta"]
-    df_clus_phi = arrays["clus_phi"]
-    df_truth_particle_pt = arrays["met_truth_particle_pt"]
-    df_truth_particle_eta = arrays["met_truth_particle_eta"]
-    df_truth_particle_phi = arrays["met_truth_particle_phi"]
-    df_truth_particle_e = arrays["met_truth_particle_e"]
+    df_lep_pt = recoil["lep_pt"]
+    df_lep_eta = recoil["lep_eta"]
+    df_lep_phi = recoil["lep_phi"]
+    df_clus_e_truth = recoil["clus_e_truth"]
+    df_clus_e_em = recoil["clus_e_em"]
+    df_clus_e_ml = recoil["clus_e_ml"]
+    df_clus_eta = recoil["clus_eta"]
+    df_clus_phi = recoil["clus_phi"]
+    df_truth_particle_pt = recoil["met_truth_particle_pt"]
+    df_truth_particle_eta = recoil["met_truth_particle_eta"]
+    df_truth_particle_phi = recoil["met_truth_particle_phi"]
+    df_truth_particle_e = recoil["met_truth_particle_e"]
 
     eta_regions = [
         ("abs_eta_lt2p5", 0.0, 2.5),
@@ -334,12 +318,12 @@ def parse_args():
 
 
 def main(args):
-    proc = NtupleProcessor_hadrecoil(args.input, args.tree, args.nEvents)
-    proc.build_arrays()
+    data = read_input_file(args.input, args.tree, args.nEvents)
+    recoil = calculate_recoil(data)
     out_file = ROOT.TFile(args.output, "RECREATE")
-    study_3(proc, out_file)
+    study_3(recoil, out_file)
     out_file.Close()
-    return proc
+    return recoil
 
 
 if __name__ == "__main__":

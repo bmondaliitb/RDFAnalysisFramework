@@ -256,16 +256,19 @@ class LeptonCollection:
             float(np.sum(pt * np.sin(phi))),
         )
 
-    @property
-    def z_eta(self) -> float:
-        """Pseudorapidity of the dimuon momentum, using massless muons."""
-        if self.count < 2:
-            return np.nan
-        z_pt = self.z_vector.pt
-        z_pz = float(np.sum(self.pt[:2] * np.sinh(self.eta[:2])))
-        if not np.isfinite(z_pt) or not np.isfinite(z_pz) or z_pt == 0.0:
-            return np.nan
-        return float(np.arcsinh(z_pz / z_pt))
+    # |-------------------------------------------------|
+    # |  don't like the implementation; can remove this |
+    # |-------------------------------------------------|
+    #@property
+    #def z_eta(self) -> float:
+    #    """Pseudorapidity of the dimuon momentum, using massless muons."""
+    #    if self.count < 2:
+    #        return np.nan
+    #    z_pt = self.z_vector.pt
+    #    z_pz = float(np.sum(self.pt[:2] * np.sinh(self.eta[:2])))
+    #    if not np.isfinite(z_pt) or not np.isfinite(z_pz) or z_pt == 0.0:
+    #        return np.nan
+    #    return float(np.arcsinh(z_pz / z_pt))
 
     @property
     def dilepton_mass(self) -> float:

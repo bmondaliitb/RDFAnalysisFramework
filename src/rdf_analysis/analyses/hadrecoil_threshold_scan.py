@@ -12,48 +12,30 @@ if __package__ in {None, ""}:
 from rdf_analysis.stats import make_hist_from_bin_contents, make_numpy_hist
 from rdf_analysis.stats.fits import calculate_gaussian_fit_params_from_arrays, calculate_mean_sigma_in_x_bins
 from rdf_analysis.analyses.hadrecoil_common import (
-    NtupleProcessor_hadrecoil,
+    read_input_file,
+    calculate_recoil,
     build_threshold_scan_observables,
     build_truth_particle_threshold_scan_observables,
 )
 
 
-def study_threshold_scans(proc, threshold_values):
-    arrays = proc.to_numpy([
-        "qT",
-        "lep_pt",
-        "lep_eta",
-        "lep_phi",
-        "met_truth_particle_pt",
-        "met_truth_particle_eta",
-        "met_truth_particle_phi",
-        "met_truth_particle_e",
-        "clus_e_truth",
-        "clus_e_em",
-        "clus_e_lcw",
-        "clus_e_ml",
-        "clus_eta",
-        "clus_phi",
-        "q_x",
-        "q_y",
-    ])
-
-    df_qT = arrays["qT"]
-    df_lep_pt = arrays["lep_pt"]
-    df_lep_eta = arrays["lep_eta"]
-    df_lep_phi = arrays["lep_phi"]
-    df_truth_particle_pt = arrays["met_truth_particle_pt"]
-    df_truth_particle_eta = arrays["met_truth_particle_eta"]
-    df_truth_particle_phi = arrays["met_truth_particle_phi"]
-    df_truth_particle_e = arrays["met_truth_particle_e"]
-    df_clus_e_truth = arrays["clus_e_truth"]
-    df_clus_e_em = arrays["clus_e_em"]
-    df_clus_e_lcw = arrays["clus_e_lcw"]
-    df_clus_e_ml = arrays["clus_e_ml"]
-    df_clus_eta = arrays["clus_eta"]
-    df_clus_phi = arrays["clus_phi"]
-    df_qx = arrays["q_x"]
-    df_qy = arrays["q_y"]
+def study_threshold_scans(recoil, threshold_values):
+    df_qT = recoil["qT"]
+    df_lep_pt = recoil["lep_pt"]
+    df_lep_eta = recoil["lep_eta"]
+    df_lep_phi = recoil["lep_phi"]
+    df_truth_particle_pt = recoil["met_truth_particle_pt"]
+    df_truth_particle_eta = recoil["met_truth_particle_eta"]
+    df_truth_particle_phi = recoil["met_truth_particle_phi"]
+    df_truth_particle_e = recoil["met_truth_particle_e"]
+    df_clus_e_truth = recoil["clus_e_truth"]
+    df_clus_e_em = recoil["clus_e_em"]
+    df_clus_e_lcw = recoil["clus_e_lcw"]
+    df_clus_e_ml = recoil["clus_e_ml"]
+    df_clus_eta = recoil["clus_eta"]
+    df_clus_phi = recoil["clus_phi"]
+    df_qx = recoil["q_x"]
+    df_qy = recoil["q_y"]
     df_qT_safe = np.maximum(df_qT, 1e-9)
 
     threshold_results = {}
@@ -223,9 +205,9 @@ def parse_args():
 
 def main(args):
 
-    proc = NtupleProcessor_hadrecoil(args.input, args.tree, args.nEvents)
-    proc.build_arrays()
-    results = study_threshold_scans(proc, args.thresholds)
+    data = read_input_file(args.input, args.tree, args.nEvents)
+    recoil = calculate_recoil(data)
+    results = study_threshold_scans(recoil, args.thresholds)
     save_threshold_results(args.output_npz, results)
 
     out_file = ROOT.TFile.Open(args.output, "RECREATE")

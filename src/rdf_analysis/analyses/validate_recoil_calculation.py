@@ -16,34 +16,26 @@ import sys
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from rdf_analysis.analyses.hadrecoil_common import NtupleProcessor_hadrecoil
+from rdf_analysis.analyses.hadrecoil_common import read_input_file, calculate_recoil
 from rdf_analysis.physics import hadronic_recoil_from_clusters_python
 from rdf_analysis.stats import make_numpy_hist, make_hist_from_bin_contents
 
 
-def validate_em_recoil_calculation(proc, max_events=None):
+def validate_em_recoil_calculation(recoil, max_events=None):
     """
     Validate EM recoil calculation by comparing Python computed u_pt_em
     against the stored u_pt_em branch.
 
     Returns dict with validation results.
     """
-    arrays = proc.to_numpy([
-        "lep_pt",
-        "lep_eta",
-        "lep_phi",
-        "clus_e_em",
-        "clus_eta",
-        "clus_phi",
-        "u_pt_em",
-    ])
-    df_lep_pt = arrays["lep_pt"]
-    df_lep_eta = arrays["lep_eta"]
-    df_lep_phi = arrays["lep_phi"]
-    df_clus_e_em = arrays["clus_e_em"]
-    df_clus_eta = arrays["clus_eta"]
-    df_clus_phi = arrays["clus_phi"]
-    u_pt_em_stored = arrays["u_pt_em"]
+
+    df_lep_pt = recoil["lep_pt"]
+    df_lep_eta = recoil["lep_eta"]
+    df_lep_phi = recoil["lep_phi"]
+    df_clus_e_em = recoil["clus_e_em"]
+    df_clus_eta = recoil["clus_eta"]
+    df_clus_phi = recoil["clus_phi"]
+    u_pt_em_stored = recoil["u_pt_em"]
 
     total_events = len(u_pt_em_stored)
     if max_events is not None and max_events > 0:
@@ -220,12 +212,11 @@ def parse_args():
 
 def main(args):
     """Main validation routine."""
-    # Initialize processor
-    proc = NtupleProcessor_hadrecoil(args.input, args.tree, args.nEvents)
-    proc.build_arrays()
+    data = read_input_file(args.input, args.tree, args.nEvents)
+    recoil = calculate_recoil(data)
 
     # Run validation
-    results = validate_em_recoil_calculation(proc, max_events=args.nEvents)
+    results = validate_em_recoil_calculation(recoil, max_events=args.nEvents)
 
     # Print summary
     validation_passed = print_validation_summary(results)

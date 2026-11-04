@@ -1,223 +1,146 @@
 import awkward as ak
 import numpy as np
+import uproot
 
-from rdf_analysis.core import NtupleProcessor
 from rdf_analysis.physics import hadrecoil_from_truth_particles, hadronic_recoil_from_clusters_python
 
 
-def _safe_denominator(values):
-    return np.maximum(values, 1e-9)
+def read_input_file(input_file, tree_name, n_events=10000):
+    """Read the hadrecoil inputs and keep events with at least two muons."""
+    branches = [
+        "mu_pt", "mu_eta", "mu_phi",
+        "tu_pt.second", "tu_phi.second",
+        "u_pt.second", "u_phi.second",
+        "fCluster_truthE", "fCluster_rawE", "fCluster_calE", "fCluster_MLE",
+        "fClusterEta", "fClusterPhi",
+        "fMETTruthPt", "fMETTruthEta", "fMETTruthPhi", "fMETTruthE",
+    ]
+    if n_events is None or n_events < 0:
+        n_events = None
+
+    with uproot.open(input_file) as input_root:
+        tree = input_root[tree_name]
+        data = tree.arrays(branches, entry_stop=n_events, library="ak", how=dict)
+
+    # Apply the event limit before the two-muon selection, as in the other studies.
+    keep = ak.num(data["mu_pt"]) >= 2
+    for branch in branches:
+        data[branch] = data[branch][keep]
+    return data
 
 
-def _at(values, index):
-    return values[:, index]
+def calculate_recoil(data):
+    """Calculate the dimuon momentum and recoil components in GeV."""
+    mu_pt = data["mu_pt"] / 1000.0
+    mu_phi = data["mu_phi"]
 
+    # Add the transverse momenta of the two muons.
+    mu1_px = mu_pt[:, 0] * np.cos(mu_phi[:, 0])
+    mu1_py = mu_pt[:, 0] * np.sin(mu_phi[:, 0])
+    mu2_px = mu_pt[:, 1] * np.cos(mu_phi[:, 1])
+    mu2_py = mu_pt[:, 1] * np.sin(mu_phi[:, 1])
+    q_x = mu1_px + mu2_px
+    q_y = mu1_py + mu2_py
+    qT = np.sqrt(q_x**2 + q_y**2)
+    qT_safe = np.maximum(qT, 1e-9)
 
-HADRECOIL_RAW_BRANCHES = {
-    "mu_pt",
-    "mu_eta",
-    "mu_phi",
-    "tu_pt/tu_pt.second",
-    "tu_phi/tu_phi.second",
-    "u_pt/u_pt.second",
-    "u_phi/u_phi.second",
-    "fCluster_truthE",
-    "fCluster_rawE",
-    "fCluster_calE",
-    "fCluster_MLE",
-    "fClusterEta",
-    "fClusterPhi",
-    "fMETTruthPt",
-    "fMETTruthEta",
-    "fMETTruthPhi",
-    "fMETTruthE",
-}
+    recoil = dict(data)
+    recoil["mu_pt0"] = mu_pt[:, 0]
+    recoil["lep_pt"] = mu_pt
+    recoil["lep_phi"] = mu_phi
+    recoil["q_x"] = q_x
+    recoil["q_y"] = q_y
+    recoil["qT"] = qT
+    recoil["z_x"] = q_x
+    recoil["z_y"] = q_y
+    recoil["z_r"] = qT
+    recoil["qhat_x"] = q_x / qT_safe
+    recoil["qhat_y"] = q_y / qT_safe
+    recoil["qhat_perp_x"] = -q_y / qT_safe
+    recoil["qhat_perp_y"] = q_x / qT_safe
 
-HADRECOIL_COLUMN_RAW_DEPENDENCIES = {
-    "mu_pt0": {"mu_pt"},
-    "z_x": {"mu_pt", "mu_phi"},
-    "z_y": {"mu_pt", "mu_phi"},
-    "z_r": {"mu_pt", "mu_phi"},
-    "qT": {"mu_pt", "mu_phi"},
-    "q_x": {"mu_pt", "mu_phi"},
-    "q_y": {"mu_pt", "mu_phi"},
-    "qhat_x": {"mu_pt", "mu_phi"},
-    "qhat_y": {"mu_pt", "mu_phi"},
-    "qhat_perp_x": {"mu_pt", "mu_phi"},
-    "qhat_perp_y": {"mu_pt", "mu_phi"},
-    "lep_pt": {"mu_pt"},
-    "lep_eta": {"mu_eta"},
-    "lep_phi": {"mu_phi"},
-    "clus_e_truth": {"fCluster_truthE"},
-    "clus_e_em": {"fCluster_rawE"},
-    "clus_e_lcw": {"fCluster_calE"},
-    "clus_e_ml": {"fCluster_MLE"},
-    "clus_eta": {"fClusterEta"},
-    "clus_phi": {"fClusterPhi"},
-    "met_truth_particle_pt": {"fMETTruthPt"},
-    "met_truth_particle_eta": {"fMETTruthEta"},
-    "met_truth_particle_phi": {"fMETTruthPhi"},
-    "met_truth_particle_e": {"fMETTruthE"},
-}
+    # Truth recoil (slot 0).
+    u_pt = data["tu_pt.second"][:, 0] / 1000.0
+    u_phi = data["tu_phi.second"][:, 0]
+    u_x = u_pt * np.cos(u_phi)
+    u_y = u_pt * np.sin(u_phi)
+    u_par = (u_x * q_x + u_y * q_y) / qT_safe
+    u_perp = (q_x * u_y - q_y * u_x) / qT_safe
 
-HADRECOIL_SCALE_SPECS = {
-    "truth": ("tu_pt/tu_pt.second", "tu_phi/tu_phi.second", 0),
-    "em": ("u_pt/u_pt.second", "u_phi/u_phi.second", 9),
-    "lcw": ("u_pt/u_pt.second", "u_phi/u_phi.second", 10),
-    "ml": ("u_pt/u_pt.second", "u_phi/u_phi.second", 11),
-}
+    recoil["u_pt_truth"] = u_pt
+    recoil["u_x_truth"] = u_x
+    recoil["u_y_truth"] = u_y
+    recoil["u_mag_truth"] = np.sqrt(u_x**2 + u_y**2)
+    recoil["u_par_truth"] = u_par
+    recoil["u_perp_truth"] = u_perp
+    recoil["u_par_plus_qT_truth"] = u_par + qT
+    recoil["u_perp_truth_alt"] = u_x * (-q_y / qT_safe) + u_y * (q_x / qT_safe)
 
-for scale, (pt_branch, phi_branch, _) in HADRECOIL_SCALE_SPECS.items():
-    HADRECOIL_COLUMN_RAW_DEPENDENCIES[f"u_pt_{scale}"] = {pt_branch}
-    for prefix in (
-        "u_x",
-        "u_y",
-        "u_mag",
-    ):
-        HADRECOIL_COLUMN_RAW_DEPENDENCIES[f"{prefix}_{scale}"] = {pt_branch, phi_branch}
-    for prefix in (
-        "u_perp",
-        "u_par",
-        "u_par_plus_qT",
-    ):
-        HADRECOIL_COLUMN_RAW_DEPENDENCIES[f"{prefix}_{scale}"] = {
-            "mu_pt",
-            "mu_phi",
-            pt_branch,
-            phi_branch,
-        }
-    HADRECOIL_COLUMN_RAW_DEPENDENCIES[f"u_perp_{scale}_alt"] = {
-        "mu_pt",
-        "mu_phi",
-        pt_branch,
-        phi_branch,
-    }
+    # EM recoil (slot 9).
+    u_pt = data["u_pt.second"][:, 9] / 1000.0
+    u_phi = data["u_phi.second"][:, 9]
+    u_x = u_pt * np.cos(u_phi)
+    u_y = u_pt * np.sin(u_phi)
+    u_par = (u_x * q_x + u_y * q_y) / qT_safe
+    u_perp = (q_x * u_y - q_y * u_x) / qT_safe
 
+    recoil["u_pt_em"] = u_pt
+    recoil["u_x_em"] = u_x
+    recoil["u_y_em"] = u_y
+    recoil["u_mag_em"] = np.sqrt(u_x**2 + u_y**2)
+    recoil["u_par_em"] = u_par
+    recoil["u_perp_em"] = u_perp
+    recoil["u_par_plus_qT_em"] = u_par + qT
+    recoil["u_perp_em_alt"] = u_x * (-q_y / qT_safe) + u_y * (q_x / qT_safe)
 
-def _hadrecoil_raw_columns(columns):
-    raw_columns = {"mu_pt"}
-    for column in columns:
-        if column in HADRECOIL_RAW_BRANCHES:
-            raw_columns.add(column)
-        elif column in HADRECOIL_COLUMN_RAW_DEPENDENCIES:
-            raw_columns.update(HADRECOIL_COLUMN_RAW_DEPENDENCIES[column])
-        else:
-            raw_columns.add(column)
+    # LCW recoil (slot 10).
+    u_pt = data["u_pt.second"][:, 10] / 1000.0
+    u_phi = data["u_phi.second"][:, 10]
+    u_x = u_pt * np.cos(u_phi)
+    u_y = u_pt * np.sin(u_phi)
+    u_par = (u_x * q_x + u_y * q_y) / qT_safe
+    u_perp = (q_x * u_y - q_y * u_x) / qT_safe
 
-    return sorted(raw_columns)
+    recoil["u_pt_lcw"] = u_pt
+    recoil["u_x_lcw"] = u_x
+    recoil["u_y_lcw"] = u_y
+    recoil["u_mag_lcw"] = np.sqrt(u_x**2 + u_y**2)
+    recoil["u_par_lcw"] = u_par
+    recoil["u_perp_lcw"] = u_perp
+    recoil["u_par_plus_qT_lcw"] = u_par + qT
+    recoil["u_perp_lcw_alt"] = u_x * (-q_y / qT_safe) + u_y * (q_x / qT_safe)
 
+    # ML recoil (slot 11).
+    u_pt = data["u_pt.second"][:, 11] / 1000.0
+    u_phi = data["u_phi.second"][:, 11]
+    u_x = u_pt * np.cos(u_phi)
+    u_y = u_pt * np.sin(u_phi)
+    u_par = (u_x * q_x + u_y * q_y) / qT_safe
+    u_perp = (q_x * u_y - q_y * u_x) / qT_safe
 
-def build_hadrecoil_arrays(raw_arrays, columns):
-    requested = set(columns)
-    arrays = {column: raw_arrays[column] for column in requested if column in raw_arrays}
+    recoil["u_pt_ml"] = u_pt
+    recoil["u_x_ml"] = u_x
+    recoil["u_y_ml"] = u_y
+    recoil["u_mag_ml"] = np.sqrt(u_x**2 + u_y**2)
+    recoil["u_par_ml"] = u_par
+    recoil["u_perp_ml"] = u_perp
+    recoil["u_par_plus_qT_ml"] = u_par + qT
+    recoil["u_perp_ml_alt"] = u_x * (-q_y / qT_safe) + u_y * (q_x / qT_safe)
 
-    def add(column, values):
-        if column in requested:
-            arrays[column] = values
+    # Additional inputs for the cluster and truth-particle studies.
+    recoil["lep_eta"] = data["mu_eta"]
+    recoil["clus_e_truth"] = data["fCluster_truthE"] / 1000.0
+    recoil["clus_e_em"] = data["fCluster_rawE"] / 1000.0
+    recoil["clus_e_lcw"] = data["fCluster_calE"] / 1000.0
+    recoil["clus_e_ml"] = data["fCluster_MLE"] / 1000.0
+    recoil["clus_eta"] = data["fClusterEta"]
+    recoil["clus_phi"] = data["fClusterPhi"]
+    recoil["met_truth_particle_pt"] = data["fMETTruthPt"] / 1000.0
+    recoil["met_truth_particle_eta"] = data["fMETTruthEta"]
+    recoil["met_truth_particle_phi"] = data["fMETTruthPhi"]
+    recoil["met_truth_particle_e"] = data["fMETTruthE"] / 1000.0
 
-    if "mu_pt" in raw_arrays:
-        add("mu_pt0", _at(raw_arrays["mu_pt"], 0) / 1000.0)
-        add("lep_pt", raw_arrays["mu_pt"] / 1000.0)
-    if "mu_eta" in raw_arrays:
-        add("lep_eta", raw_arrays["mu_eta"])
-    if "mu_phi" in raw_arrays:
-        add("lep_phi", raw_arrays["mu_phi"])
-
-    z_x = z_y = z_r = qhat_perp_x = qhat_perp_y = None
-    if "mu_pt" in raw_arrays and "mu_phi" in raw_arrays:
-        z_x = _at(raw_arrays["mu_pt"], 0) / 1000.0 * np.cos(_at(raw_arrays["mu_phi"], 0))
-        z_x = z_x + _at(raw_arrays["mu_pt"], 1) / 1000.0 * np.cos(_at(raw_arrays["mu_phi"], 1))
-        z_y = _at(raw_arrays["mu_pt"], 0) / 1000.0 * np.sin(_at(raw_arrays["mu_phi"], 0))
-        z_y = z_y + _at(raw_arrays["mu_pt"], 1) / 1000.0 * np.sin(_at(raw_arrays["mu_phi"], 1))
-        z_r = np.sqrt(z_x * z_x + z_y * z_y)
-        qhat_x = z_x / _safe_denominator(z_r)
-        qhat_y = z_y / _safe_denominator(z_r)
-        qhat_perp_x = -qhat_y
-        qhat_perp_y = qhat_x
-
-        add("z_x", z_x)
-        add("z_y", z_y)
-        add("z_r", z_r)
-        add("qT", z_r)
-        add("q_x", z_x)
-        add("q_y", z_y)
-        add("qhat_x", qhat_x)
-        add("qhat_y", qhat_y)
-        add("qhat_perp_x", qhat_perp_x)
-        add("qhat_perp_y", qhat_perp_y)
-
-    for scale, (pt_branch, phi_branch, index) in HADRECOIL_SCALE_SPECS.items():
-        if pt_branch not in raw_arrays:
-            continue
-
-        u_pt = _at(raw_arrays[pt_branch], index) / 1000.0
-        add(f"u_pt_{scale}", u_pt)
-
-        if phi_branch not in raw_arrays:
-            continue
-
-        u_x = u_pt * np.cos(_at(raw_arrays[phi_branch], index))
-        u_y = u_pt * np.sin(_at(raw_arrays[phi_branch], index))
-        add(f"u_x_{scale}", u_x)
-        add(f"u_y_{scale}", u_y)
-        add(f"u_mag_{scale}", np.sqrt(u_x * u_x + u_y * u_y))
-
-        if z_x is None or z_y is None or z_r is None:
-            continue
-
-        u_perp = (z_x * u_y - z_y * u_x) / _safe_denominator(z_r)
-        u_par = (u_x * z_x + u_y * z_y) / _safe_denominator(z_r)
-        add(f"u_perp_{scale}", u_perp)
-        add(f"u_par_{scale}", u_par)
-        add(f"u_par_plus_qT_{scale}", u_par + z_r)
-
-        if qhat_perp_x is not None and qhat_perp_y is not None:
-            add(f"u_perp_{scale}_alt", u_x * qhat_perp_x + u_y * qhat_perp_y)
-
-    if "fCluster_truthE" in raw_arrays:
-        add("clus_e_truth", raw_arrays["fCluster_truthE"] / 1000.0)
-    if "fCluster_rawE" in raw_arrays:
-        add("clus_e_em", raw_arrays["fCluster_rawE"] / 1000.0)
-    if "fCluster_calE" in raw_arrays:
-        add("clus_e_lcw", raw_arrays["fCluster_calE"] / 1000.0)
-    if "fCluster_MLE" in raw_arrays:
-        add("clus_e_ml", raw_arrays["fCluster_MLE"] / 1000.0)
-    if "fClusterEta" in raw_arrays:
-        add("clus_eta", raw_arrays["fClusterEta"])
-    if "fClusterPhi" in raw_arrays:
-        add("clus_phi", raw_arrays["fClusterPhi"])
-
-    if "fMETTruthPt" in raw_arrays:
-        add("met_truth_particle_pt", raw_arrays["fMETTruthPt"] / 1000.0)
-    if "fMETTruthEta" in raw_arrays:
-        add("met_truth_particle_eta", raw_arrays["fMETTruthEta"])
-    if "fMETTruthPhi" in raw_arrays:
-        add("met_truth_particle_phi", raw_arrays["fMETTruthPhi"])
-    if "fMETTruthE" in raw_arrays:
-        add("met_truth_particle_e", raw_arrays["fMETTruthE"] / 1000.0)
-
-    missing_columns = [column for column in columns if column not in arrays]
-    if missing_columns:
-        raise KeyError("Unable to build hadrecoil columns: {}".format(", ".join(missing_columns)))
-
-    return {column: arrays[column] for column in columns}
-
-
-class NtupleProcessor_hadrecoil(NtupleProcessor):
-    def _required_branches(self, columns):
-        branches = set(super()._required_branches(columns))
-        branches.add("mu_pt")
-        return sorted(branches)
-
-    def _select_events(self, raw_arrays):
-        keep = ak.num(raw_arrays["mu_pt"]) > 1
-        return {name: values[keep] for name, values in raw_arrays.items()}
-
-    def materialize(self, columns):
-        columns = list(columns)
-        raw_columns = _hadrecoil_raw_columns(columns)
-        raw_arrays = super().materialize(raw_columns)
-        return build_hadrecoil_arrays(raw_arrays, columns)
+    return recoil
 
 
 def build_threshold_scan_observables(lep_pt, lep_eta, lep_phi, clus_e, clus_eta, clus_phi, thresholds):
@@ -227,12 +150,7 @@ def build_threshold_scan_observables(lep_pt, lep_eta, lep_phi, clus_e, clus_eta,
     clus_eta = np.asarray(clus_eta)
     clus_phi = np.asarray(clus_phi)
 
-    # Compute absolute momentum from energy and eta: p = E / cosh(eta) * cosh(eta) = E (for massless)
-    # Actually: pT = E / cosh(eta), p = pT * cosh(eta) = E
-    # So absolute momentum equals energy for massless approximation
-    # But let's be more explicit: p = sqrt(pT^2 + pz^2) where pT = E/cosh(eta), pz = E*sinh(eta)/cosh(eta)
-    # p = E/cosh(eta) * sqrt(1 + sinh^2(eta)) = E/cosh(eta) * cosh(eta) = E
-    # So p = E for massless particles. But for clarity we compute it explicitly.
+    # For massless clusters, pT = E / cosh(eta) and |p| = pT * cosh(eta).
     clus_pt = clus_e / np.cosh(clus_eta)
     clus_p = clus_pt * np.cosh(clus_eta)  # This equals E for massless
 

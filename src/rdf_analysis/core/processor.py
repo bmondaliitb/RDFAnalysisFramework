@@ -5,7 +5,7 @@ import uproot
 def awkward_to_numpy(values, dtype=np.float64):
     return ak.to_numpy(values).astype(dtype, copy=False)
 
-class NtupleProcessor:
+class NtupleProcessor():
     """uproot/awkward reader shared by analysis scripts."""
 
     def __init__(self, input_file, tree_name, n_events, step_size=10000):
@@ -37,7 +37,7 @@ class NtupleProcessor:
         common_branches = None
         for input_file in self.input_file:
             with uproot.open(input_file) as root_file:
-                branches = set(root_file[self.tree_name].keys())
+                branches = set(root_file[self.tree_name].keys(full_paths=False))
             common_branches = branches if common_branches is None else common_branches & branches
 
         return common_branches or set()
@@ -45,8 +45,22 @@ class NtupleProcessor:
     def _required_branches(self, columns):
         return sorted(set(columns))
 
-    #def _select_events(self, raw_arrays):
-    #    return raw_arrays
+    def _select_events(self, raw_arrays):
+        return raw_arrays
+
+    def materialize(self, columns):
+        """Collect selected events from all chunks into one array per column."""
+        columns = list(columns)
+        if not columns:
+            return {}
+        chunks = {column: [] for column in columns}
+        for arrays in self.iter_arrays(columns):
+            for column in columns:
+                chunks[column].append(arrays[column])
+        return {
+            column: ak.concatenate(parts, axis=0) if parts else ak.Array([])
+            for column, parts in chunks.items()
+        }
 
     def iter_arrays(self, columns):
         """
@@ -75,7 +89,7 @@ class NtupleProcessor:
         step_size = min(self.step_size, self.n_events_to_process)
 
         for raw_arrays in uproot.iterate(
-            self._input_trees(), filter_name=required_branches, step_size=step_size, library="ak", how=dict,):
+            self._input_trees(), expressions=required_branches, step_size=step_size, library="ak", how=dict,):
             if processed_events >= self.n_events_to_process:
                 break
 
@@ -86,7 +100,7 @@ class NtupleProcessor:
                 chunk_events = remaining_events
 
             processed_events += chunk_events
-            #raw_arrays = self._select_events(raw_arrays)
+            raw_arrays = self._select_events(raw_arrays)
             if not raw_arrays or len(next(iter(raw_arrays.values()))) == 0:
                 continue
 

@@ -52,7 +52,7 @@ class METConfig:
     # flattened vector follows TRUTH_MET_COMPONENT_INDICES above; changing this
     # tuple changes the physics reference without changing event processing.
     #TRUTH_MET_REFERENCE_COMPONENTS = ("Int", "IntMuons")
-    TRUTH_MET_REFERENCE_COMPONENTS = ("NonInt",)
+    TRUTH_MET_REFERENCE_COMPONENTS = ("Int",)
 
     LEPTON_BRANCHES = {
         "pt": "mu_pt",
@@ -69,7 +69,7 @@ class METConfig:
         "em": ("EM", "fCluster_rawE"),
         "lcw": ("LCW", "fCluster_calE"),
         "ml": ("ML", "fCluster_MLE"),
-        "ml_forward": ("ML forward", "cluster_e_ML_forward"),
+        #"ml_forward": ("ML forward", "cluster_e_ML_forward"),
         "truth": ("truth", "fCluster_truthE"),
     }
 

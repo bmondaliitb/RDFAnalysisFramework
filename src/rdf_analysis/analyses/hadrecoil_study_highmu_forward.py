@@ -240,9 +240,9 @@ class HadRecoil:
         recoil["u_par_plus_qT_truth"] = u_par + qT
         recoil["u_perp_truth_alt"] = u_x * (-q_y / qT) + u_y * (q_x / qT)
 
-        # EM recoil (slot 9).
-        u_pt = data["u_pt.second"][event][9] / 1000.0
-        u_phi = data["u_phi.second"][event][9]
+        # EM recoil (slot 11).
+        u_pt = data["u_pt.second"][event][11] / 1000.0
+        u_phi = data["u_phi.second"][event][11]
         u_x = u_pt * np.cos(u_phi)
         u_y = u_pt * np.sin(u_phi)
         u_par = (u_x * q_x + u_y * q_y) / qT
@@ -257,9 +257,9 @@ class HadRecoil:
         recoil["u_par_plus_qT_em"] = u_par + qT
         recoil["u_perp_em_alt"] = u_x * (-q_y / qT) + u_y * (q_x / qT)
 
-        # LCW recoil (slot 10).
-        u_pt = data["u_pt.second"][event][10] / 1000.0
-        u_phi = data["u_phi.second"][event][10]
+        # LCW recoil (slot 12).
+        u_pt = data["u_pt.second"][event][12] / 1000.0
+        u_phi = data["u_phi.second"][event][12]
         u_x = u_pt * np.cos(u_phi)
         u_y = u_pt * np.sin(u_phi)
         u_par = (u_x * q_x + u_y * q_y) / qT
@@ -274,9 +274,9 @@ class HadRecoil:
         recoil["u_par_plus_qT_lcw"] = u_par + qT
         recoil["u_perp_lcw_alt"] = u_x * (-q_y / qT) + u_y * (q_x / qT)
 
-        # ML recoil (slot 11).
-        u_pt = data["u_pt.second"][event][11] / 1000.0
-        u_phi = data["u_phi.second"][event][11]
+        # ML recoil (slot 13).
+        u_pt = data["u_pt.second"][event][13] / 1000.0
+        u_phi = data["u_phi.second"][event][13]
         u_x = u_pt * np.cos(u_phi)
         u_y = u_pt * np.sin(u_phi)
         u_par = (u_x * q_x + u_y * q_y) / qT

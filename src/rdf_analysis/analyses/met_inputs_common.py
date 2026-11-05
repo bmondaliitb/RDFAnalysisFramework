@@ -69,7 +69,7 @@ class METConfig:
         "em": ("EM", "fCluster_rawE"),
         "lcw": ("LCW", "fCluster_calE"),
         "ml": ("ML", "fCluster_MLE"),
-        #"ml_forward": ("ML forward", "cluster_e_ML_forward"),
+        "ml_forward": ("ML forward", "cluster_e_ML_forward"),
         "truth": ("truth", "fCluster_truthE"),
     }
 

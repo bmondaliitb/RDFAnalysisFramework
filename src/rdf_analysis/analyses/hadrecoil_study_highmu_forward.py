@@ -32,6 +32,15 @@ from rdf_analysis.stats.histograms import make_hist_from_bin_contents, make_nump
 QT_BINS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 120, 160, 200, 260]
 MU_BINS = list(range(0, 85, 5))
 VERTEX_BINS = list(range(0, 51, 2))
+ANGLE_BINS = np.linspace(-np.pi, np.pi, 25)
+FORWARD_SUM_PT_BINS = [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 1000]
+FORWARD_CLUSTER_BINS = [-0.5, 0.5, 10.5, 25.5, 50.5, 100.5, 200.5, 400.5, 800.5, 1600.5]
+FORWARD_JET_BINS = np.arange(-0.5, 10.5, 1.0)
+MT_BINS = np.linspace(0, 200, 41)
+TRUTH_MT_BRANCHES = tuple(f"{prefix}_{field}" for prefix in ("tlep_bare", "tneutrino")
+                          for field in ("pt", "phi", "pdgId"))
+MIN_MEAN_ENTRIES = 10
+TREE_RECOIL_SCALES = ("truth", "em", "lcw", "ml", "pfoEM")
 
 
 def cluster_recoil(leptons, clusters, scale, mask, args=None, energy=None):
@@ -68,9 +77,10 @@ class HadRecoil:
         self.event_counts = dict.fromkeys([
             "total", "valid_met_inputs", "one_muon", "valid_w",
             "pileup_selection", "valid_truth_met", "valid_clusters",
-            "selected", "with_selected_forward_jets"], 0)
-        self.event_values = {key: [] for key in ("qT", "avgMu", "nPrimVtx")}
-        names = ["standard_met", "tree_truth", "tree_em", "tree_lcw", "tree_ml"]
+            "selected", "with_selected_forward_jets", "valid_truth_mT", "invalid_truth_mT"], 0)
+        self.event_values = {key: [] for key in ("qT", "avgMu", "nPrimVtx",
+            "deltaPhi_W_mu", "forward_sum_pt_em", "n_forward_clusters_em", "n_forward_jets", "mT_truth")}
+        names = ["standard_met", *(f"tree_{scale}" for scale in TREE_RECOIL_SCALES)]
         for scale in METConfig.CLUSTER_SCALES:
             names += [f"central_clusters_{scale}", f"all_clusters_{scale}",
                 f"keep_jets_forward_clusters_{scale}",
@@ -79,7 +89,7 @@ class HadRecoil:
         for name in names:
             self.values[name] = {key: [] for key in (
                 "u_pt", "u_par", "u_perp", "balance", "residual_x", "residual_y",
-                "met_residual_x", "met_residual_y")}
+                "met_residual_x", "met_residual_y", "met", "mT", "mT_residual")}
 
     def set_branches(self, branches):
         self.branches = list(dict.fromkeys(branches))
@@ -180,7 +190,7 @@ class HadRecoil:
             )
             # Compare the reconstructed scenarios with the recoil stored in the tree.
             tree_recoil = self.calculate_recoil(array, event)
-            for scale in ("truth", "em", "lcw", "ml"):
+            for scale in TREE_RECOIL_SCALES:
                 recoils[f"tree_{scale}"] = TransverseVector(
                     tree_recoil[f"u_x_{scale}"], tree_recoil[f"u_y_{scale}"])
             if not all(np.isfinite([u.x, u.y]).all() for u in recoils.values()):
@@ -194,11 +204,31 @@ class HadRecoil:
 
             cos_phi = np.cos(w_phi)
             sin_phi = np.sin(w_phi)
+            # Use the leading muon as the W lepton when several are present.
+            lepton_index = int(np.argmax(leptons.pt))
+            lepton_pt = leptons.pt[lepton_index]
+            lepton_phi = leptons.phi[lepton_index]
+            self.event_values["deltaPhi_W_mu"].append(
+                met_inputs_common.wrap_delta_phi(w_phi - lepton_phi))
+            forward_sum_pt, forward_count = forward_activity(clusters, args)
+            self.event_values["forward_sum_pt_em"].append(forward_sum_pt)
+            self.event_values["n_forward_clusters_em"].append(forward_count)
+            self.event_values["n_forward_jets"].append(n_forward_jets)
+            truth_mt = truth_transverse_mass(array, event)
+            self.event_values["mT_truth"].append(truth_mt)
+            self.event_counts["valid_truth_mT" if np.isfinite(truth_mt) else "invalid_truth_mT"] += 1
             for name, u in recoils.items():
                 u_par = u.x * cos_phi + u.y * sin_phi
                 u_perp = -u.x * sin_phi + u.y * cos_phi
                 # Ideal recoil is -pT(W), so u_parallel + qT and u_perp vanish.
-                met_residual = -u - lepton_sum - truth_met.vector
+                missing = -u - lepton_sum
+                met_residual = missing - truth_met.vector
+                mt_squared = 2.0 * lepton_pt * missing.pt * (
+                    1.0 - np.cos(lepton_phi - missing.phi))
+                self.values[name]["met"].append(missing.pt)
+                reco_mt = np.sqrt(max(0.0, mt_squared))
+                self.values[name]["mT"].append(reco_mt)
+                self.values[name]["mT_residual"].append(reco_mt - truth_mt)
                 self.values[name]["u_pt"].append(u.pt)
                 self.values[name]["u_par"].append(u_par)
                 self.values[name]["u_perp"].append(u_perp)
@@ -228,8 +258,8 @@ class HadRecoil:
         u_phi = data["tu_phi.second"][event][0]
         u_x = u_pt * np.cos(u_phi)
         u_y = u_pt * np.sin(u_phi)
-        u_par = (u_x * q_x + u_y * q_y) / qT
-        u_perp = (q_x * u_y - q_y * u_x) / qT
+        u_par = u_x * np.cos(tboson_phi) + u_y * np.sin(tboson_phi)
+        u_perp = u_y * np.cos(tboson_phi) - u_x * np.sin(tboson_phi)
 
         recoil["u_pt_truth"] = u_pt
         recoil["u_x_truth"] = u_x
@@ -238,15 +268,15 @@ class HadRecoil:
         recoil["u_par_truth"] = u_par
         recoil["u_perp_truth"] = u_perp
         recoil["u_par_plus_qT_truth"] = u_par + qT
-        recoil["u_perp_truth_alt"] = u_x * (-q_y / qT) + u_y * (q_x / qT)
+        recoil["u_perp_truth_alt"] = -u_x * np.sin(tboson_phi) + u_y * np.cos(tboson_phi)
 
         # EM recoil (slot 11).
         u_pt = data["u_pt.second"][event][11] / 1000.0
         u_phi = data["u_phi.second"][event][11]
         u_x = u_pt * np.cos(u_phi)
         u_y = u_pt * np.sin(u_phi)
-        u_par = (u_x * q_x + u_y * q_y) / qT
-        u_perp = (q_x * u_y - q_y * u_x) / qT
+        u_par = u_x * np.cos(tboson_phi) + u_y * np.sin(tboson_phi)
+        u_perp = u_y * np.cos(tboson_phi) - u_x * np.sin(tboson_phi)
 
         recoil["u_pt_em"] = u_pt
         recoil["u_x_em"] = u_x
@@ -255,15 +285,15 @@ class HadRecoil:
         recoil["u_par_em"] = u_par
         recoil["u_perp_em"] = u_perp
         recoil["u_par_plus_qT_em"] = u_par + qT
-        recoil["u_perp_em_alt"] = u_x * (-q_y / qT) + u_y * (q_x / qT)
+        recoil["u_perp_em_alt"] = -u_x * np.sin(tboson_phi) + u_y * np.cos(tboson_phi)
 
         # LCW recoil (slot 12).
         u_pt = data["u_pt.second"][event][12] / 1000.0
         u_phi = data["u_phi.second"][event][12]
         u_x = u_pt * np.cos(u_phi)
         u_y = u_pt * np.sin(u_phi)
-        u_par = (u_x * q_x + u_y * q_y) / qT
-        u_perp = (q_x * u_y - q_y * u_x) / qT
+        u_par = u_x * np.cos(tboson_phi) + u_y * np.sin(tboson_phi)
+        u_perp = u_y * np.cos(tboson_phi) - u_x * np.sin(tboson_phi)
 
         recoil["u_pt_lcw"] = u_pt
         recoil["u_x_lcw"] = u_x
@@ -272,15 +302,15 @@ class HadRecoil:
         recoil["u_par_lcw"] = u_par
         recoil["u_perp_lcw"] = u_perp
         recoil["u_par_plus_qT_lcw"] = u_par + qT
-        recoil["u_perp_lcw_alt"] = u_x * (-q_y / qT) + u_y * (q_x / qT)
+        recoil["u_perp_lcw_alt"] = -u_x * np.sin(tboson_phi) + u_y * np.cos(tboson_phi)
 
         # ML recoil (slot 13).
         u_pt = data["u_pt.second"][event][13] / 1000.0
         u_phi = data["u_phi.second"][event][13]
         u_x = u_pt * np.cos(u_phi)
         u_y = u_pt * np.sin(u_phi)
-        u_par = (u_x * q_x + u_y * q_y) / qT
-        u_perp = (q_x * u_y - q_y * u_x) / qT
+        u_par = u_x * np.cos(tboson_phi) + u_y * np.sin(tboson_phi)
+        u_perp = u_y * np.cos(tboson_phi) - u_x * np.sin(tboson_phi)
 
         recoil["u_pt_ml"] = u_pt
         recoil["u_x_ml"] = u_x
@@ -289,9 +319,229 @@ class HadRecoil:
         recoil["u_par_ml"] = u_par
         recoil["u_perp_ml"] = u_perp
         recoil["u_par_plus_qT_ml"] = u_par + qT
-        recoil["u_perp_ml_alt"] = u_x * (-q_y / qT) + u_y * (q_x / qT)
+        recoil["u_perp_ml_alt"] = -u_x * np.sin(tboson_phi) + u_y * np.cos(tboson_phi)
+
+        # recoil pfoEM(slot 19).
+        u_pt = data["u_pt.second"][event][19] / 1000.0
+        u_phi = data["u_phi.second"][event][19]
+        u_x = u_pt * np.cos(u_phi)
+        u_y = u_pt * np.sin(u_phi)
+        u_par = u_x * np.cos(tboson_phi) + u_y * np.sin(tboson_phi)
+        u_perp = u_y * np.cos(tboson_phi) - u_x * np.sin(tboson_phi)
+
+        recoil["u_pt_pfoEM"] = u_pt
+        recoil["u_x_pfoEM"] = u_x
+        recoil["u_y_pfoEM"] = u_y
+        recoil["u_mag_pfoEM"] = np.sqrt(u_x**2 + u_y**2)
+        recoil["u_par_pfoEM"] = u_par
+        recoil["u_perp_pfoEM"] = u_perp
+        recoil["u_par_plus_qT_pfoEM"] = u_par + qT
+        recoil["u_perp_pfoEM_alt"] = -u_x * np.sin(tboson_phi) + u_y * np.cos(tboson_phi)
 
         return recoil
+
+
+def truth_transverse_mass(array, event):
+    """Bare W-muon + W-neutrino mT in GeV; no reconstructed inputs.
+
+    These branches are assumed to describe the same W decay. Accept scalar or
+    singleton values, not arbitrary pairings from multi-particle collections.
+    Missing branches fail explicitly; invalid event records return NaN.
+    """
+    particles = []
+    for prefix in ("tlep_bare", "tneutrino"):
+        fields = [np.asarray(array[f"{prefix}_{field}"][event], dtype=float)
+                  for field in ("pt", "phi", "pdgId")]
+        if any(value.size != 1 for value in fields):
+            return np.nan
+        pt, phi, pdg_id = (float(value.reshape(-1)[0]) for value in fields)
+        if not np.isfinite([pt, phi, pdg_id]).all() or pt < 0:
+            return np.nan
+        particles.append((pt * METConfig.GEV, phi, pdg_id))
+    (mu_pt, mu_phi, mu_id), (nu_pt, nu_phi, nu_id) = particles
+    if abs(mu_id) != 13 or abs(nu_id) != 14 or mu_id * nu_id >= 0:
+        return np.nan
+    # Stable equivalent of sqrt(2*pT_mu*pT_nu*(1-cos(delta_phi))).
+    return float(2 * np.sqrt(mu_pt) * np.sqrt(nu_pt) * abs(np.sin((mu_phi - nu_phi)/2)))
+
+
+def mass_migration(truth, reco, edges):
+    """Counts and P(reco bin | truth bin), including both ROOT flow bins.
+
+    Rows index truth, columns reconstruction. Empty rows remain NaN in the
+    normalized matrix. ROOT convention: values at the final edge overflow.
+    """
+    truth, reco = np.asarray(truth), np.asarray(reco)
+    if truth.ndim != 1 or truth.shape != reco.shape:
+        raise ValueError("Migration inputs must be aligned one-dimensional arrays")
+    finite = np.isfinite(truth) & np.isfinite(reco)
+    size = len(edges) + 1
+    counts = np.zeros((size, size), dtype=float)
+    np.add.at(counts, (np.searchsorted(edges, truth[finite], side="right"),
+                      np.searchsorted(edges, reco[finite], side="right")), 1)
+    totals = counts.sum(axis=1)
+    normalized = np.full_like(counts, np.nan)
+    np.divide(counts, totals[:, None], out=normalized, where=totals[:, None] > 0)
+    return counts, normalized, totals
+
+
+def save_mass_diagnostics(event_values, values):
+    import ROOT
+
+    truth = event_values["mT_truth"]
+    hist = make_numpy_hist("h_mT_truth", "Bare truth W decay;m_{T}^{truth} [GeV];Events",
+                          MT_BINS, truth[np.isfinite(truth)])
+    hist.GetXaxis().SetTitle("m_{T}^{truth} [GeV]")
+    hist.Write()
+    baseline = values["standard_met"]["mT_residual"]
+    for name, obs in values.items():
+        residual = obs["mT_residual"]
+        hist = make_numpy_hist(f"h_mT_residual_{name}",
+                              f"{name};m_{{T}}^{{reco}}-m_{{T}}^{{truth}} [GeV];Events",
+                              120, -150, 150, residual[np.isfinite(residual)])
+        hist.GetXaxis().SetTitle("m_{T}^{reco}-m_{T}^{truth} [GeV]")
+        hist.Write()
+        for variable, edges, title in (("qT", QT_BINS, "p_{T}^{W} [GeV]"),
+                                       ("nPrimVtx", VERTEX_BINS, "N_{PV}")):
+            x = event_values[variable]
+            for key, y in (("mT_residual", residual),
+                           ("paired_delta_abs_mT_residual", np.abs(residual)-np.abs(baseline))):
+                means, errors, entries = calculate_binned_mean(x, y, edges)
+                suffix = f"{key}_vs_{variable}_{name}"
+                write_diagnostic(f"h_mean_{suffix}", f"{name};{title};Mean {key} [GeV]", edges, means, errors)
+                write_diagnostic(f"h_mean_entries_{suffix}", f"{name};{title};Finite events", edges, entries)
+                write_diagnostic(f"h_mean_valid_{suffix}", f"{name};{title};Valid mean", edges, np.isfinite(means).astype(float))
+            _, width = calculate_sigma_iqr_in_x_bins(x, residual, edges)
+            write_diagnostic(f"h_sigma_mT_residual_vs_{variable}_{name}",
+                             f"{name};{title};#sigma_{{IQR}}(m_{{T}}^{{reco}}-m_{{T}}^{{truth}}) [GeV]",
+                             edges, width / 2)
+        counts, normalized, totals = mass_migration(truth, obs["mT"], MT_BINS)
+        for suffix, contents in (("counts", counts), ("normalized", normalized)):
+            hist = ROOT.TH2D(f"h_mT_truth_vs_reco_{suffix}_{name}",
+                             f"{name};m_{{T}}^{{truth}} [GeV];m_{{T}}^{{reco}} [GeV]",
+                             len(MT_BINS)-1, MT_BINS, len(MT_BINS)-1, MT_BINS)
+            # Include flow cells so large reconstructed tails do not disappear
+            # from row normalization. Errors are Poisson / marginal binomial.
+            for i in range(len(totals)):
+                for j in range(len(totals)):
+                    value = contents[i, j]
+                    error = (np.sqrt(value) if suffix == "counts" else
+                             np.sqrt(value*(1-value)/totals[i]) if totals[i] > 0 else np.nan)
+                    hist.SetBinContent(i, j, float(value))
+                    hist.SetBinError(i, j, float(error))
+            hist.SetEntries(float(counts.sum()))
+            hist.Write()
+        for suffix, contents in (("entries", totals), ("valid", (totals > 0).astype(float))):
+            hist = make_hist_from_bin_contents(f"h_mT_migration_truth_{suffix}_{name}",
+                                               f"{name};m_{{T}}^{{truth}} [GeV];{suffix}",
+                                               MT_BINS, contents[1:-1])
+            hist.SetBinContent(0, float(contents[0]))
+            hist.SetBinContent(len(MT_BINS), float(contents[-1]))
+            hist.Write()
+
+
+def forward_activity(clusters, args):
+    """Fixed EM activity before lepton-cone/UE corrections, in GeV."""
+    energy = clusters.energy["em"]
+    mask = clusters.in_abs_eta_range(args.eta_min, args.eta_max)
+    mask &= np.isfinite(energy) & np.isfinite(clusters.phi) & (energy >= 0)
+    energy, eta = energy[mask], clusters.eta[mask]
+    pt = energy / np.cosh(eta)
+    selected = (energy if args.threshold_on == "momentum" else pt) >= args.cluster_threshold
+    return float(np.sum(pt[selected])), int(np.count_nonzero(selected))
+
+
+def calculate_binned_mean(x, y, edges, min_entries=MIN_MEAN_ENTRIES):
+    """Unweighted mean and sample standard error; final edge is inclusive."""
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    if x.shape != y.shape or x.ndim != 1:
+        raise ValueError("Mean inputs must be aligned one-dimensional event arrays")
+    means = np.full(len(edges) - 1, np.nan)
+    errors = np.full_like(means, np.nan)
+    counts = np.zeros(len(means), dtype=int)
+    finite = np.isfinite(x) & np.isfinite(y)
+    for i, (low, high) in enumerate(zip(edges[:-1], edges[1:])):
+        selected = finite & (x >= low) & (x <= high if i == len(means)-1 else x < high)
+        sample = y[selected]
+        counts[i] = len(sample)
+        if len(sample) >= max(2, min_entries):
+            means[i] = np.mean(sample)
+            errors[i] = np.std(sample, ddof=1) / np.sqrt(len(sample))
+    return means, errors, counts
+
+
+def angular_flatness(means, reference_counts, valid):
+    """Count-weighted angular variation and offset, NOT recoil resolution."""
+    valid = np.asarray(valid) & np.isfinite(means) & (reference_counts > 0)
+    if np.count_nonzero(valid) < 2:
+        return np.nan, np.nan
+    offset = np.average(means[valid], weights=reference_counts[valid])
+    return np.sqrt(np.average((means[valid] - offset)**2,
+                             weights=reference_counts[valid])), offset
+
+
+def write_diagnostic(name, title, edges, contents, errors=None):
+    # The shared utility maps NaNs to zero. Restore NaNs so invalid estimates
+    # cannot be mistaken for perfect balance; companion masks aid ROOT plotting.
+    hist = make_hist_from_bin_contents(name, title, edges, contents)
+    for i, value in enumerate(contents, 1):
+        hist.SetBinContent(i, float(value))
+        hist.SetBinError(i, float(errors[i-1]) if errors is not None else 0.0)
+    hist.Write()
+
+
+def save_bias_diagnostics(event_values, values):
+    axes = {
+        "qT": (QT_BINS, "p_{T}^{W} [GeV]"),
+        "avgMu": (MU_BINS, "<#mu>"),
+        "nPrimVtx": (VERTEX_BINS, "N_{PV}"),
+        "deltaPhi_W_mu": (ANGLE_BINS, "#Delta#phi(W,#mu) [rad]"),
+        "forward_sum_pt_em": (FORWARD_SUM_PT_BINS, "Forward EM #Sigma p_{T} [GeV]"),
+        "n_forward_clusters_em": (FORWARD_CLUSTER_BINS, "Forward EM cluster multiplicity"),
+        "n_forward_jets": (FORWARD_JET_BINS, "Selected forward jet multiplicity"),
+    }
+    n_events = len(event_values["qT"])
+    if any(len(x) != n_events for x in event_values.values()) or any(
+            len(y) != n_events for obs in values.values() for y in obs.values()):
+        raise ValueError("Scenario and event arrays must be aligned")
+    angle = event_values["deltaPhi_W_mu"]
+    # Common support and fixed counts prevent scenario-dependent reweighting.
+    common = np.isfinite(angle)
+    for obs in values.values():
+        common &= np.isfinite(obs["u_perp"])
+    reference_counts = np.histogram(angle[common], ANGLE_BINS)[0]
+    write_diagnostic("h_angular_reference_entries", "Angular reference;#Delta#phi(W,#mu) [rad];Events",
+                     ANGLE_BINS, reference_counts)
+    angular = {name: calculate_binned_mean(angle[common], obs["u_perp"][common], ANGLE_BINS)
+               for name, obs in values.items()}
+    valid = reference_counts >= MIN_MEAN_ENTRIES
+    for means, _, _ in angular.values():
+        valid &= np.isfinite(means)
+    write_diagnostic("h_angular_flatness_valid", "Common angular support;#Delta#phi(W,#mu) [rad];Valid",
+                     ANGLE_BINS, valid.astype(float))
+    hist = make_numpy_hist("h_deltaPhi_W_mu", "W and leading muon;#Delta#phi(W,#mu) [rad];Events",
+                          ANGLE_BINS, angle[np.isfinite(angle)])
+    hist.GetXaxis().SetTitle("#Delta#phi(W,#mu) [rad]")
+    hist.Write()
+    baseline = values["standard_met"]
+    for name, obs in values.items():
+        jobs = [(key, variable, obs[key]) for variable in axes
+                for key in (("balance", "u_perp") if variable in
+                            ("qT", "avgMu", "nPrimVtx", "deltaPhi_W_mu") else ("balance",))]
+        jobs.append(("abs_balance", "forward_sum_pt_em", np.abs(obs["balance"])))
+        for key, variables in (("balance", ("nPrimVtx", "qT")), ("u_perp", ("nPrimVtx",))):
+            delta = np.abs(obs[key]) - np.abs(baseline[key])
+            jobs.extend((f"paired_delta_abs_{key}", variable, delta) for variable in variables)
+        for key, variable, y in jobs:
+            edges, title = axes[variable]
+            means, errors, counts = calculate_binned_mean(event_values[variable], y, edges)
+            suffix = f"{key}_vs_{variable}_{name}"
+            write_diagnostic(f"h_mean_{suffix}", f"{name};{title};Mean {key} [GeV]", edges, means, errors)
+            write_diagnostic(f"h_mean_entries_{suffix}", f"{name};{title};Finite events", edges, counts)
+            write_diagnostic(f"h_mean_valid_{suffix}", f"{name};{title};Valid mean", edges, np.isfinite(means).astype(float))
+        flatness, offset = angular_flatness(angular[name][0], reference_counts, valid)
+        for key, value in (("angular_flatness_u_perp", flatness), ("angular_offset_u_perp", offset)):
+            write_diagnostic(f"h_{key}_{name}", f"{name};Summary;{key} [GeV]", [0, 1], [value])
 
 
 def calculate_binned_response(x, qT, u_par, edges):
@@ -322,6 +572,16 @@ def save_histograms(event_values, values, counts, output_path, args):
         settings["resolution"] = "(q84 - q16) / 2; at least 10 entries per bin"
         settings["cluster_scale_factors"] = METConfig.CLUSTER_SCALE_FACTORS
         settings["truth_met_components"] = METConfig.TRUTH_MET_REFERENCE_COMPONENTS
+        settings["scenario_met"] = "missing transverse momentum = -recoil - visible lepton sum"
+        settings["transverse_mass"] = "sqrt(2 * leading_muon_pt * scenario_met * (1 - cos(delta_phi)))"
+        settings["mean_statistics"] = "Unweighted mean; sample SEM; >=10 finite events; invalid bins NaN with entries/valid companions"
+        settings["angular_flatness"] = "Count-weighted RMS of bin means about offset on common finite support; >=2 valid bins; not resolution; no noise subtraction"
+        settings["forward_activity"] = "Fixed EM E/cosh(eta), nonnegative finite energies, configured threshold and eta range, before cone/UE correction"
+        settings["truth_mT_reference"] = "Bare truth muon tlep_bare_{pt,phi,pdgId} and tneutrino_{pt,phi,pdgId}; pt assumed MeV, converted to GeV; scalar/singleton W daughters; |PDG|=13,14 with opposite signs. Common W parent assumed from ntuple semantics, not independently verified; no reco-truth matching imposed. Invalid truth entries excluded only from mass diagnostics."
+        settings["mT_migration"] = "X=truth, Y=reco; rows normalized over all reco bins INCLUDING flows; final edge overflows (ROOT convention); empty rows NaN with validity/count histograms."
+        settings["tree_truth_mT"] = "Existing tree_truth scenario still uses reconstructed leptons; h_mT_truth is the independent daughter-level truth reference."
+        settings["ml_energy_selection"] = "Existing scenarios preserved: all_clusters_ml combines central fCluster_MLE (MeV/1000) and forward cluster_e_ML_forward (GeV); other ml subsets use fCluster_MLE; ml_forward uses cluster_e_ML_forward."
+        settings["zero_qT_projection"] = "Uses stored truth W phi even at qT=0; direction there is conventional"
         ROOT.TNamed("settings", json.dumps(settings)).Write()
         cutflow = ROOT.TH1D("h_cutflow", "Event selection", len(counts), 0, len(counts))
         for index, (name, count) in enumerate(counts.items(), start=1):
@@ -329,11 +589,15 @@ def save_histograms(event_values, values, counts, output_path, args):
             cutflow.SetBinContent(index, count)
         cutflow.Write()
 
+        save_bias_diagnostics(event_values, values)
+        save_mass_diagnostics(event_values, values)
+
         for name, observables in values.items():
             for key in ("u_pt", "balance", "u_perp", "residual_x", "residual_y",
-                        "met_residual_x", "met_residual_y"):
-                low, high = (0, 300) if key == "u_pt" else (-150, 150)
-                make_numpy_hist(f"h_{key}_{name}", f"{name};{key} [GeV];Events",
+                        "met_residual_x", "met_residual_y", "met", "mT"):
+                low, high = (0, 300) if key in ("u_pt", "met", "mT") else (-150, 150)
+                axis_title = {"met": "E_{T}^{miss}", "mT": "m_{T}"}.get(key, key)
+                make_numpy_hist(f"h_{key}_{name}", f"{name};{axis_title} [GeV];Events",
                                 120, low, high, observables[key]).Write()
             for variable, edges, axis_title in (
                 ("qT", QT_BINS, "p_{T}^{W} [GeV]"),
@@ -415,6 +679,7 @@ def main():
     branches += list(METConfig.CLUSTER_DIRECTION_BRANCHES.values())
     branches += [branch for _, branch in METConfig.CLUSTER_SCALES.values()]
     branches += ["cluster_e_ML_forward"]
+    branches += list(TRUTH_MT_BRANCHES)
     branches += ["tboson_pt", "tboson_eta", "tboson_phi", "avgMu", "nPrimVtx"]
     branches += [METConfig.TRUTH_MET_PT_BRANCH, METConfig.TRUTH_MET_PHI_BRANCH]
     branches += ["tu_pt.second", "tu_phi.second", "u_pt.second", "u_phi.second"]

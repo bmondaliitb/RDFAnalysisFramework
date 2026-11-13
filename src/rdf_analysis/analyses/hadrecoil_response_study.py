@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 import argparse
 from pathlib import Path
+import glob
 import ROOT
 import sys
+import awkward as ak
+import logging
+
+# Set the minimum log level to output (default is WARNING)
+logging.basicConfig(level=logging.INFO)
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from rdf_analysis.analyses.hadrecoil_common import read_input_file, calculate_recoil
+from rdf_analysis.analyses.hadrecoil_common import HadRecoilCommon
 from rdf_analysis.stats import make_hist_from_bin_contents
 from rdf_analysis.stats.fits import (
     calculate_gaussian_fit_params_from_arrays,
@@ -132,7 +138,8 @@ def save_response_histograms(recoil, output_file):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run hadrecoil response study.")
-    parser.add_argument("--input", required=True, help="Path to input ROOT file.")
+    parser.add_argument("--input", help="Path to input ROOT file.")
+    parser.add_argument("--input-dir", help="Directory containing input root files.")
     parser.add_argument("--tree", required=True, help="Tree name.")
     parser.add_argument("--output", default="hadrecoil_response_study.root", help="Output ROOT file path.")
     parser.add_argument("--nEvents", type=int, default=10000, help="Number of events to process.")
@@ -140,10 +147,34 @@ def parse_args():
 
 
 def main(args):
-    data = read_input_file(args.input, args.tree, args.nEvents)
-    recoil = calculate_recoil(data)
+    input_files = list(args.input or [])
+    if args.input_dir:
+        input_files += [str(path) for path in Path(args.input_dir).rglob("*.root")]
+    input_files = sorted(set(input_files))
+    branches = [
+        "mu_pt", "mu_eta", "mu_phi",
+        "tu_pt.second", "tu_phi.second",
+        "u_pt.second", "u_phi.second",
+        "fCluster_truthE", "fCluster_rawE",
+        "fCluster_calE", "fCluster_MLE",
+        "fClusterEta", "fClusterPhi",
+        "fMETTruthPt", "fMETTruthEta",
+        "fMETTruthPhi", "fMETTruthE",
+        "tboson_pt", "tboson_eta", "tboson_phi",
+        "avgMu", "nPrimVtx",
+    ]
+    logging.info("Processing %d ROOT files", len(input_files))
+    analysis = HadRecoilCommon(input_files,args.tree,branches,args.nEvents)
+    # Calculate recoil observables for all selected events.
+    recoil = analysis.execute()
+
+    logging.info("Selected %d events", len(recoil["qT"]))
+
+    # Save response and resolution histograms.
     save_response_histograms(recoil, args.output)
-    return recoil
+
+    logging.info("Histograms saved to %s", args.output)
+
 
 
 if __name__ == "__main__":

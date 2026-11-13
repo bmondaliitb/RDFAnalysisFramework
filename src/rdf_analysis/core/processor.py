@@ -88,8 +88,7 @@ class NtupleProcessor():
         processed_events = 0
         step_size = min(self.step_size, self.n_events_to_process)
 
-        for raw_arrays in uproot.iterate(
-            self._input_trees(), expressions=required_branches, step_size=step_size, library="ak", how=dict,):
+        for raw_arrays in uproot.iterate(self._input_trees(), expressions=required_branches, step_size=step_size, library="ak", how=dict,):
             if processed_events >= self.n_events_to_process:
                 break
 

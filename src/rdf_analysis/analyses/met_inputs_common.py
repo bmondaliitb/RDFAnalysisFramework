@@ -51,8 +51,7 @@ class METConfig:
     # Select the truth-MET component used as the resolution reference.  The
     # flattened vector follows TRUTH_MET_COMPONENT_INDICES above; changing this
     # tuple changes the physics reference without changing event processing.
-    #TRUTH_MET_REFERENCE_COMPONENTS = ("Int", "IntMuons")
-    TRUTH_MET_REFERENCE_COMPONENTS = ("Int",)
+    TRUTH_MET_REFERENCE_COMPONENTS = ("NonInt",)
 
     LEPTON_BRANCHES = {
         "pt": "mu_pt",
@@ -501,7 +500,7 @@ def build_maker_met(arrays: Mapping[str, object], event: int,) -> TransverseVect
 
 
 def build_truth_met(arrays: Mapping[str, object], event: int, pt_branch: str = METConfig.TRUTH_MET_PT_BRANCH, phi_branch: str = METConfig.TRUTH_MET_PHI_BRANCH,) -> Optional[TruthMET]:
-    """Build the Int + IntMuons truth-MET reference vector."""
+    """Build the configured truth-MET reference vector (NonInt by default)."""
     pt_values = awkward_to_numpy(arrays[pt_branch][event])
     phi_values = awkward_to_numpy(arrays[phi_branch][event])
 

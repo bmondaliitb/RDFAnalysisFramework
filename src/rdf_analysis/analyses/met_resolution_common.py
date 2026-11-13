@@ -66,7 +66,7 @@ class METResolutionStudyBase(ABC):
 
     BASE_VARIANT_LABELS = {
         "current": "current MET",
-        "truth_met": "truth MET (Int + IntMuons)",
+        "truth_met": "truth MET (NonInt)",
     }
 
     def __init__(self, input_files: Union[str, List[str]], tree_name: str, output_path: str, max_events: int = -1,) -> None:

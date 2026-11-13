@@ -10,6 +10,8 @@ from typing import Mapping
 from types import SimpleNamespace
 import sys
 
+import ROOT
+
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -102,9 +104,16 @@ class HadRecoil:
     def save_histograms(self, output):
         event_values = {key: np.asarray(value, dtype=float)
                         for key, value in self.event_values.items()}
-        values = {name: {key: np.asarray(value, dtype=float)
-                        for key, value in observables.items()}
-                  for name, observables in self.values.items()}
+        event_values = {}
+        for key, value in self.event_values.items():
+            event_values[key] = np.asarray(value, dtype=float)
+
+        values = {}
+        for name, observables in self.values.items():
+            values[name] = {}
+            for key, value in observables.items():
+                values[name][key] = np.asarray(value, dtype=float)
+
         save_histograms(event_values, values, self.event_counts, output, self.args)
 
     def calculate_event_recoils(self, met_inputs, leptons, clusters, ml_energy):
@@ -253,11 +262,11 @@ class HadRecoil:
         recoil["q_y"] = q_y
         recoil["qT"] = qT
 
-        # Truth recoil (slot 0).
+        # Int (slot 0) stores negative visible momentum; recoil uses the visible sum.
         u_pt = data["tu_pt.second"][event][0] / 1000.0
         u_phi = data["tu_phi.second"][event][0]
-        u_x = u_pt * np.cos(u_phi)
-        u_y = u_pt * np.sin(u_phi)
+        u_x = -u_pt * np.cos(u_phi)
+        u_y = -u_pt * np.sin(u_phi)
         u_par = u_x * np.cos(tboson_phi) + u_y * np.sin(tboson_phi)
         u_perp = u_y * np.cos(tboson_phi) - u_x * np.sin(tboson_phi)
 
@@ -386,7 +395,6 @@ def mass_migration(truth, reco, edges):
 
 
 def save_mass_diagnostics(event_values, values):
-    import ROOT
 
     truth = event_values["mT_truth"]
     hist = make_numpy_hist("h_mT_truth", "Bare truth W decay;m_{T}^{truth} [GeV];Events",
@@ -559,8 +567,6 @@ def calculate_binned_response(x, qT, u_par, edges):
 
 
 def save_histograms(event_values, values, counts, output_path, args):
-    import ROOT
-
     ROOT.gROOT.SetBatch(True)
     ROOT.TH1.AddDirectory(False)
     output = ROOT.TFile.Open(output_path, "RECREATE")
